@@ -36,6 +36,14 @@ def ensure_image(image: str) -> None:
         client().images.pull(image)
 
 
+def refresh_image(image: str) -> None:
+    """Pull the latest tag; fall back to the cached image when offline."""
+    try:
+        client().images.pull(image)
+    except docker.errors.APIError:
+        client().images.get(image)  # raises if we have no copy at all
+
+
 def run_sandboxed(
     image: str,
     command: list[str],
@@ -47,9 +55,11 @@ def run_sandboxed(
     entrypoint: list[str] | None = None,
     environment: dict | None = None,
     mem_limit: str = DEFAULT_MEM,
+    working_dir: str | None = None,
+    stderr_in_logs: bool = True,
     check: bool = True,
 ) -> tuple[int, str]:
-    """Run one command in a fresh container; return (exit_code, combined logs)."""
+    """Run one command in a fresh container; return (exit_code, logs)."""
     ensure_image(image)
     container = client().containers.create(
         image,
@@ -64,6 +74,7 @@ def run_sandboxed(
         pids_limit=256,
         tmpfs={"/tmp": "size=256m"},
         security_opt=["no-new-privileges"],
+        working_dir=working_dir,
     )
     try:
         container.start()
@@ -73,7 +84,7 @@ def run_sandboxed(
         except (requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError):
             container.kill()
             raise SandboxError(f"sandbox step timed out after {timeout}s ({image})")
-        logs = container.logs(stdout=True, stderr=True).decode(errors="replace")
+        logs = container.logs(stdout=True, stderr=stderr_in_logs).decode(errors="replace")
     finally:
         container.remove(force=True)
 
@@ -90,8 +101,8 @@ def create_workspace(scan_id: str) -> str:
     client().volumes.create(name)
     run_sandboxed(
         CLONE_IMAGE,
-        entrypoint=["chown"],
-        command=["-R", SANDBOX_USER, "/workspace"],
+        entrypoint=["sh"],
+        command=["-c", f"mkdir -p /workspace/results && chown -R {SANDBOX_USER} /workspace"],
         user="root",
         volumes={name: {"bind": "/workspace", "mode": "rw"}},
         timeout=60,
