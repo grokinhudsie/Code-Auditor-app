@@ -46,9 +46,16 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="VulnScanner API", lifespan=lifespan)
 
+# Comma-separated allowed frontend origins (e.g. your Vercel URL in production).
+CORS_ORIGINS = [
+    o.strip()
+    for o in os.environ.get("FRONTEND_ORIGIN", "http://localhost:3000").split(",")
+    if o.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=CORS_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )

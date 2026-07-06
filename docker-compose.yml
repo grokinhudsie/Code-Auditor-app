@@ -8,6 +8,7 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg2://vulnscanner:vulnscanner@postgres:5432/vulnscanner
       REDIS_URL: redis://redis:6379/0
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:3000}
     depends_on:
       postgres:
         condition: service_healthy
@@ -25,7 +26,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       PROMPT_DIR: /app/prompts
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-mythos-5}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-fable-5}
       ANTHROPIC_FALLBACK_MODEL: ${ANTHROPIC_FALLBACK_MODEL:-claude-opus-4-8}
     depends_on:
       postgres:

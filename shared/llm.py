@@ -13,7 +13,7 @@ import os
 from functools import lru_cache
 from pathlib import Path
 
-MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-mythos-5")
+MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-fable-5")
 PROMPT_DIR = Path(os.environ.get("PROMPT_DIR", "/app/prompts"))
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 CACHE_TTL = int(os.environ.get("TRIAGE_CACHE_TTL", str(30 * 24 * 3600)))
