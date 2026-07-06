@@ -13,10 +13,18 @@ import os
 from functools import lru_cache
 from pathlib import Path
 
-MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-8")
+MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-mythos-5")
 PROMPT_DIR = Path(os.environ.get("PROMPT_DIR", "/app/prompts"))
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 CACHE_TTL = int(os.environ.get("TRIAGE_CACHE_TTL", str(30 * 24 * 3600)))
+
+# Fable 5 / Mythos 5 have thinking always on (forced tool_choice is rejected) and
+# run safety classifiers that can false-positive-refuse security-triage content.
+# For those models we use auto tool_choice and a server-side fallback to a GA
+# model. Set ANTHROPIC_FALLBACK_MODEL="" to disable the fallback.
+FALLBACK_MODEL = os.environ.get("ANTHROPIC_FALLBACK_MODEL", "claude-opus-4-8")
+_THINKING_ALWAYS_ON = MODEL.startswith(("claude-fable-5", "claude-mythos-5"))
+MAX_TOKENS = int(os.environ.get("ANTHROPIC_MAX_TOKENS", "8192"))
 
 _TRIAGE_BATCH = 8
 
@@ -144,6 +152,38 @@ def _tool_input(response, tool_name: str) -> dict | None:
     return None
 
 
+def _invoke(system: str, tool: dict, tool_name: str, user: str) -> dict:
+    """One structured LLM call. Returns the tool input dict, or {} if the model
+    refused or didn't call the tool."""
+    kwargs = dict(
+        model=MODEL,
+        max_tokens=MAX_TOKENS,
+        system=system,
+        tools=[tool],
+        # Thinking-always-on models reject forced tool_choice; auto + a
+        # "respond only via the tool" system prompt is the compatible path.
+        tool_choice={"type": "auto"} if _THINKING_ALWAYS_ON
+        else {"type": "tool", "name": tool_name},
+        messages=[{"role": "user", "content": user}],
+    )
+    if _THINKING_ALWAYS_ON and FALLBACK_MODEL and FALLBACK_MODEL != MODEL:
+        try:
+            resp = _client().beta.messages.create(
+                betas=["server-side-fallback-2026-06-01"],
+                fallbacks=[{"model": FALLBACK_MODEL}],
+                **kwargs,
+            )
+        except Exception:
+            # Fallback beta not enabled on this account — degrade to a plain call.
+            resp = _client().messages.create(**kwargs)
+    else:
+        resp = _client().messages.create(**kwargs)
+
+    if getattr(resp, "stop_reason", None) == "refusal":
+        return {}
+    return _tool_input(resp, tool_name) or {}
+
+
 def triage(findings: list[dict], contexts: dict[str, str]) -> dict[str, dict]:
     """Return {finding_id: {triaged_severity, likely_false_positive, explanation}}."""
     results: dict[str, dict] = {}
@@ -166,15 +206,7 @@ def triage(findings: list[dict], contexts: dict[str, str]) -> dict[str, dict]:
             f"Triage the following {len(batch)} finding(s). Return one verdict per "
             f"finding, keyed by the exact `id` shown.\n\n{blocks}"
         )
-        resp = _client().messages.create(
-            model=MODEL,
-            max_tokens=4096,
-            system=_prompt("triage_system.txt"),
-            tools=[TRIAGE_TOOL],
-            tool_choice={"type": "tool", "name": "record_triage"},
-            messages=[{"role": "user", "content": user}],
-        )
-        data = _tool_input(resp, "record_triage") or {}
+        data = _invoke(_prompt("triage_system.txt"), TRIAGE_TOOL, "record_triage", user)
         for v in data.get("verdicts", []):
             if v.get("id"):
                 verdict = {
@@ -193,15 +225,7 @@ def generate_patch(finding: dict, context: str | None) -> dict:
         "Write a fix for the following finding.\n\n"
         + _finding_block(finding, context)
     )
-    resp = _client().messages.create(
-        model=MODEL,
-        max_tokens=4096,
-        system=_prompt("patch_system.txt"),
-        tools=[PATCH_TOOL],
-        tool_choice={"type": "tool", "name": "record_patch"},
-        messages=[{"role": "user", "content": user}],
-    )
-    data = _tool_input(resp, "record_patch") or {}
+    data = _invoke(_prompt("patch_system.txt"), PATCH_TOOL, "record_patch", user)
     return {
         "patch": data.get("patch") or None,
         "rationale": data.get("rationale") or None,

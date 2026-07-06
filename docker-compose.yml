@@ -25,7 +25,8 @@ services:
       REDIS_URL: redis://redis:6379/0
       PROMPT_DIR: /app/prompts
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-4-8}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-mythos-5}
+      ANTHROPIC_FALLBACK_MODEL: ${ANTHROPIC_FALLBACK_MODEL:-claude-opus-4-8}
     depends_on:
       postgres:
         condition: service_healthy
