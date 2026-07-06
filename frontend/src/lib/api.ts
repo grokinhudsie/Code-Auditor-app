@@ -1,6 +1,6 @@
-export const API_BASE =
-  process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
-
+// Calls go to same-origin Next.js route handlers under /api, which proxy to the
+// backend server-side and inject the auth token. The browser never sees the
+// backend URL or token.
 export type Finding = {
   id: string;
   scanner: string;
@@ -33,7 +33,7 @@ export type Scan = {
 };
 
 export async function createScan(gitUrl: string): Promise<{ scan_id: string }> {
-  const res = await fetch(`${API_BASE}/scans`, {
+  const res = await fetch(`/api/scans`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ git_url: gitUrl }),
@@ -46,7 +46,7 @@ export async function createScan(gitUrl: string): Promise<{ scan_id: string }> {
 }
 
 export async function getScan(id: string): Promise<Scan> {
-  const res = await fetch(`${API_BASE}/scans/${id}`, { cache: "no-store" });
+  const res = await fetch(`/api/scans/${id}`, { cache: "no-store" });
   if (!res.ok) throw new Error(`Scan not found (${res.status})`);
   return res.json();
 }

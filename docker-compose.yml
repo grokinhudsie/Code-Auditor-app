@@ -9,6 +9,7 @@ services:
       DATABASE_URL: postgresql+psycopg2://vulnscanner:vulnscanner@postgres:5432/vulnscanner
       REDIS_URL: redis://redis:6379/0
       FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:3000}
+      API_TOKEN: ${API_TOKEN:-}
     depends_on:
       postgres:
         condition: service_healthy

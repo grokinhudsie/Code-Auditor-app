@@ -1,9 +1,10 @@
+import hmac
 import os
 import re
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from redis import Redis
@@ -65,6 +66,20 @@ def scan_queue() -> Queue:
     return Queue("scans", connection=Redis.from_url(REDIS_URL))
 
 
+# Shared bearer token. When set, all endpoints except /health require it.
+# When unset (local dev), auth is disabled. Held server-side only (the Next.js
+# proxy on Vercel injects it) so it never reaches the browser.
+API_TOKEN = os.environ.get("API_TOKEN", "")
+
+
+def require_auth(request: Request) -> None:
+    if not API_TOKEN:
+        return
+    header = request.headers.get("authorization", "")
+    if not hmac.compare_digest(header, f"Bearer {API_TOKEN}"):
+        raise HTTPException(401, "unauthorized")
+
+
 class ScanRequest(BaseModel):
     git_url: str
 
@@ -74,7 +89,7 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/scans", status_code=202)
+@app.post("/scans", status_code=202, dependencies=[Depends(require_auth)])
 def create_scan(req: ScanRequest, request: Request) -> dict:
     _rate_limit(request.client.host if request.client else "unknown")
     url = req.git_url.strip()
@@ -92,7 +107,7 @@ def create_scan(req: ScanRequest, request: Request) -> dict:
     return {"scan_id": scan_id, "status": "queued"}
 
 
-@app.get("/scans/{scan_id}")
+@app.get("/scans/{scan_id}", dependencies=[Depends(require_auth)])
 def get_scan(scan_id: str) -> dict:
     with SessionLocal() as session:
         scan = session.get(Scan, scan_id)

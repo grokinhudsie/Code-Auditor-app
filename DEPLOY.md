@@ -39,16 +39,22 @@ docker compose ps
 curl -s http://localhost:8000/health   # {"status":"ok"}
 ```
 
-## 3. Environment (`.env`)
+## 3. Environment (`.env` on the droplet)
 
 ```
 ANTHROPIC_API_KEY=sk-ant-...            # required for LLM triage/patches
-ANTHROPIC_MODEL=claude-mythos-5         # or claude-fable-5 if no Glasswing access
-FRONTEND_ORIGIN=https://your-app.vercel.app   # your Vercel URL (for CORS)
+ANTHROPIC_MODEL=claude-fable-5          # claude-mythos-5 only with Glasswing access
+API_TOKEN=<paste output of: openssl rand -hex 32>   # protects the API
 ```
 
-`FRONTEND_ORIGIN` must match your Vercel domain exactly, or the browser will
-block API calls. Multiple origins can be comma-separated.
+Generate the token once on the droplet:
+
+```bash
+openssl rand -hex 32
+```
+
+Put that value in `API_TOKEN` here **and** as `API_TOKEN` in Vercel (§5) — they
+must match. Without a matching token, the frontend's requests get 401.
 
 ## 4. Expose the API
 
@@ -77,25 +83,29 @@ Then `FRONTEND_ORIGIN` stays your Vercel URL and the frontend calls
 ## 5. Frontend on Vercel
 
 - Import the repo in Vercel; set **Root Directory = `frontend`**.
-- Add an environment variable:
-  `NEXT_PUBLIC_API_BASE = https://api.yourdomain.com` (or `http://<DROPLET_IP>:8000`
-  for HTTP testing).
+- Add **two** environment variables (both server-side — do NOT prefix with
+  `NEXT_PUBLIC_`, so they never reach the browser):
+  - `API_BASE = https://api.yourdomain.com` (or `http://<DROPLET_IP>:8000` for
+    HTTP testing)
+  - `API_TOKEN = <the same token you put in the droplet's .env>`
 - Deploy. Vercel gives you the URL you visit.
 
-The frontend already reads `NEXT_PUBLIC_API_BASE` (falls back to
-`http://localhost:8000` for local dev), so no code change is needed.
+The browser only ever talks to the Vercel app; Vercel's server proxies to your
+droplet and adds the token. The token is never exposed to the browser, and
+anyone hitting the droplet directly without it gets 401.
 
 ## 6. Lock it down (do this before sharing the URL)
 
-The API has **no authentication** — anyone who can reach it can submit scans and
-burn your Anthropic credits, and the worker runs untrusted code in sandboxes.
-Before exposing publicly, at minimum:
+The API requires the `API_TOKEN` bearer token (set it — see §3), so the droplet
+won't accept scans from anyone who doesn't have it. Remaining hardening:
 
-- Restrict who can reach it (Cloudflare Access, a VPN, an IP allowlist, or a
-  shared-secret header check), **or** keep the droplet's firewall closed to the
-  public and only allow your Vercel deployment's egress.
+- **Anyone who can load your Vercel page can still submit scans** (the proxy
+  submits on their behalf). If the app should be private to you, add a login/
+  password gate on the frontend (e.g. Vercel's password protection, or a Basic-
+  Auth middleware) so only you can reach it.
 - Treat the droplet as disposable and isolated — don't run anything else
-  sensitive on it. See `THREAT_MODEL.md`.
+  sensitive on it. The worker runs untrusted code in sandboxes. See
+  `THREAT_MODEL.md`.
 
 ## 7. Operations
 
