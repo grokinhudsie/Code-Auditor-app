@@ -59,6 +59,7 @@ def run_sandboxed(
     mem_limit: str = DEFAULT_MEM,
     working_dir: str | None = None,
     stderr_in_logs: bool = True,
+    cap_add: list | None = None,
     check: bool = True,
 ) -> tuple[int, str]:
     """Run one command in a fresh container; return (exit_code, logs)."""
@@ -77,6 +78,7 @@ def run_sandboxed(
         tmpfs={"/tmp": "size=256m"},
         security_opt=["no-new-privileges"],
         cap_drop=["ALL"],  # scanners need no Linux capabilities
+        cap_add=cap_add or [],  # trusted setup steps may re-add specific caps
         working_dir=working_dir,
     )
     try:
@@ -109,6 +111,7 @@ def create_workspace(scan_id: str) -> str:
         user="root",
         volumes={name: {"bind": "/workspace", "mode": "rw"}},
         timeout=60,
+        cap_add=["CHOWN"],  # trusted step: chown the fresh volume to the sandbox user
     )
     return name
 

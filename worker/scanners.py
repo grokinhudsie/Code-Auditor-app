@@ -63,13 +63,18 @@ def run_trivy(volume_name: str) -> str:
             "--format", "sarif",
             "--output", "/workspace/results/trivy.sarif",
             "--no-progress",
+            # Default mirror.gcr.io mirror is flaky; use the canonical DB repos.
+            "--db-repository", "ghcr.io/aquasecurity/trivy-db:2",
+            "--java-db-repository", "ghcr.io/aquasecurity/trivy-java-db:1",
             "/workspace/repo",
         ],
         volumes=_volumes(volume_name),
         network_mode="bridge",  # vuln DB refresh
         mem_limit="2g",
         timeout=1800,
-        environment={"TRIVY_CACHE_DIR": "/tmp/trivy"},
+        # Cache on the workspace volume, not the small tmpfs /tmp — the
+        # decompressed vuln DB is far larger than the tmpfs size cap.
+        environment={"TRIVY_CACHE_DIR": "/workspace/.trivycache"},
     )
     return read_result_file(volume_name, "trivy.sarif")
 
