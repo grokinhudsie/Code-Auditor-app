@@ -1,6 +1,8 @@
 services:
   api:
-    build: ./backend
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     ports:
       - "8000:8000"
     environment:
@@ -13,7 +15,11 @@ services:
         condition: service_healthy
 
   worker:
-    build: ./worker
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       DATABASE_URL: postgresql+psycopg2://vulnscanner:vulnscanner@postgres:5432/vulnscanner
       REDIS_URL: redis://redis:6379/0
