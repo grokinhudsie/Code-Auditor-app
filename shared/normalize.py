@@ -85,6 +85,53 @@ def _clean_path(uri: str | None) -> str | None:
     return uri or None
 
 
+_SEVERITY_RANK = {"critical": 5, "high": 4, "medium": 3, "low": 2, "info": 1}
+# When the same issue is seen by several scanners, keep the most authoritative.
+_SCANNER_RANK = {"trivy": 3, "gitleaks": 2, "semgrep": 1}
+
+
+def dedupe(findings: list[dict]) -> list[dict]:
+    """Collapse duplicates across scanners (BUILD_PLAN §5): by
+    (file_path, start_line, rule_id), and by overlapping CVE ids. When two
+    findings merge, keep the higher-severity / higher-priority scanner and
+    union their cve_ids and references."""
+    survivors: list[dict] = []
+    by_location: dict[tuple, int] = {}
+    by_cve: dict[str, int] = {}
+
+    def better(a: dict, b: dict) -> dict:
+        """Pick which of two merged findings to keep as the representative."""
+        sa = (_SEVERITY_RANK.get(a["raw_severity"], 0), _SCANNER_RANK.get(a["scanner"], 0))
+        sb = (_SEVERITY_RANK.get(b["raw_severity"], 0), _SCANNER_RANK.get(b["scanner"], 0))
+        return a if sa >= sb else b
+
+    def merge_into(idx: int, f: dict) -> None:
+        kept = better(survivors[idx], f)
+        other = f if kept is survivors[idx] else survivors[idx]
+        kept["cve_ids"] = sorted(set(kept["cve_ids"]) | set(other["cve_ids"]))
+        kept["references"] = sorted(set(kept["references"]) | set(other["references"]))
+        survivors[idx] = kept
+
+    for f in findings:
+        loc_key = (f["file_path"], f["start_line"], f["rule_id"])
+        target = by_location.get(loc_key)
+        if target is None:
+            for cve in f["cve_ids"]:
+                if cve in by_cve:
+                    target = by_cve[cve]
+                    break
+        if target is not None:
+            merge_into(target, f)
+        else:
+            target = len(survivors)
+            survivors.append(f)
+            by_location[loc_key] = target
+        for cve in f["cve_ids"]:
+            by_cve.setdefault(cve, target)
+
+    return survivors
+
+
 def parse_sarif(sarif_text: str, scanner: str) -> list[dict]:
     """Parse one SARIF document into a list of unified finding dicts."""
     sarif = json.loads(sarif_text)

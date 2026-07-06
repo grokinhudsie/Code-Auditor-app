@@ -6,6 +6,7 @@ COPY worker/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY shared ./shared
+COPY backend/prompts ./prompts
 COPY worker/*.py ./
 
 CMD ["sh", "-c", "rq worker --url \"$REDIS_URL\" scans"]

@@ -6,6 +6,8 @@ CPU/memory/pid limited, hard-timed-out, and networkless unless the step
 inherently needs egress (git clone, scanner DB refresh).
 """
 
+import os
+
 import docker
 import requests
 
@@ -74,6 +76,7 @@ def run_sandboxed(
         pids_limit=256,
         tmpfs={"/tmp": "size=256m"},
         security_opt=["no-new-privileges"],
+        cap_drop=["ALL"],  # scanners need no Linux capabilities
         working_dir=working_dir,
     )
     try:
@@ -117,6 +120,58 @@ def remove_workspace(volume_name: str) -> None:
         pass
 
 
+def read_source(volume_name: str, rel_path: str, start: int, end: int,
+                pad: int = 8) -> str | None:
+    """Return numbered source lines around [start, end] for LLM context.
+    Runs networkless and read-only; rel_path is validated to stay in the repo."""
+    if not rel_path or start is None:
+        return None
+    # Reject traversal / absolute paths before handing to the container.
+    if rel_path.startswith("/") or ".." in rel_path.split("/"):
+        return None
+    lo = max(1, start - pad)
+    hi = (end or start) + pad
+    script = (
+        f'cd /workspace/repo && f="./{rel_path}"; [ -f "$f" ] && '
+        f'awk "NR>={lo} && NR<={hi} {{printf \\"%d: %s\\n\\", NR, \\$0}}" "$f" || true'
+    )
+    _, logs = run_sandboxed(
+        CLONE_IMAGE,
+        entrypoint=["sh"],
+        command=["-c", script],
+        volumes={volume_name: {"bind": "/workspace", "mode": "ro"}},
+        timeout=60,
+        stderr_in_logs=False,
+        check=False,
+    )
+    return logs.strip() or None
+
+
+def check_patch_applies(volume_name: str, diff: str) -> bool:
+    """Validate a unified diff with `git apply --check` (BUILD_PLAN §5). The
+    patch is never applied — only checked — and this runs networkless."""
+    import base64
+
+    # Pass the diff via base64 to avoid any shell-quoting issues with its content.
+    b64 = base64.b64encode(diff.encode()).decode()
+    script = (
+        f'cd /workspace/repo && echo {b64} | base64 -d > /tmp/fix.patch && '
+        f'git apply --check /tmp/fix.patch'
+    )
+    code, _ = run_sandboxed(
+        CLONE_IMAGE,
+        entrypoint=["sh"],
+        command=["-c", script],
+        volumes={volume_name: {"bind": "/workspace", "mode": "ro"}},
+        timeout=60,
+        check=False,
+    )
+    return code == 0
+
+
+MAX_REPO_MB = int(os.environ.get("MAX_REPO_MB", "500"))
+
+
 def clone_repo(volume_name: str, git_url: str) -> None:
     """Shallow-clone into /workspace/repo. Only sandbox step with egress."""
     run_sandboxed(
@@ -127,6 +182,25 @@ def clone_repo(volume_name: str, git_url: str) -> None:
         mem_limit="512m",
         timeout=300,
     )
+    _enforce_repo_size(volume_name)
+
+
+def _enforce_repo_size(volume_name: str) -> None:
+    """Reject oversized repos (zip-bomb / disk-exhaustion guard, BUILD_PLAN §7)."""
+    _, logs = run_sandboxed(
+        CLONE_IMAGE,
+        entrypoint=["sh"],
+        command=["-c", "du -sm /workspace/repo | cut -f1"],
+        volumes={volume_name: {"bind": "/workspace", "mode": "ro"}},
+        timeout=120,
+        stderr_in_logs=False,
+    )
+    try:
+        size_mb = int(logs.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        return  # couldn't measure; don't block the scan
+    if size_mb > MAX_REPO_MB:
+        raise SandboxError(f"repo too large: {size_mb}MB > {MAX_REPO_MB}MB cap")
 
 
 def list_file_tree(volume_name: str, limit: int = 2000) -> list[str]:

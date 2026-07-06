@@ -1,8 +1,9 @@
 import os
 import re
+import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from redis import Redis
@@ -17,6 +18,24 @@ REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 GIT_URL_RE = re.compile(r"^https://[A-Za-z0-9.-]+(:\d+)?/[A-Za-z0-9._~/-]+(\.git)?$")
 
 SCAN_JOB_TIMEOUT = 3600
+
+# Rate limit: N scan submissions per IP per window (BUILD_PLAN §7).
+RATE_LIMIT = int(os.environ.get("SCAN_RATE_LIMIT", "10"))
+RATE_WINDOW = int(os.environ.get("SCAN_RATE_WINDOW", "3600"))
+
+_redis = Redis.from_url(REDIS_URL)
+
+
+def _rate_limit(ip: str) -> None:
+    """Fixed-window counter in Redis; raises 429 when exceeded."""
+    key = f"ratelimit:scans:{ip}:{int(time.time()) // RATE_WINDOW}"
+    count = _redis.incr(key)
+    if count == 1:
+        _redis.expire(key, RATE_WINDOW)
+    if count > RATE_LIMIT:
+        raise HTTPException(
+            429, f"rate limit exceeded ({RATE_LIMIT} scans per {RATE_WINDOW}s)"
+        )
 
 
 @asynccontextmanager
@@ -49,7 +68,8 @@ def health() -> dict[str, str]:
 
 
 @app.post("/scans", status_code=202)
-def create_scan(req: ScanRequest) -> dict:
+def create_scan(req: ScanRequest, request: Request) -> dict:
+    _rate_limit(request.client.host if request.client else "unknown")
     url = req.git_url.strip()
     if not GIT_URL_RE.match(url):
         raise HTTPException(422, "git_url must be a plain https git URL")

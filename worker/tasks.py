@@ -4,7 +4,8 @@ import re
 
 from shared.db import SessionLocal, init_db
 from shared.models import Finding, Scan
-from shared.normalize import parse_sarif
+from shared.normalize import dedupe, parse_sarif
+from shared import llm
 
 import sandbox
 import scanners
@@ -35,6 +36,62 @@ def _store_findings(scan_id: str, findings: list[dict]) -> None:
         session.commit()
 
 
+def _gather_contexts(volume: str, findings: list[dict]) -> dict[str, str]:
+    ctx: dict[str, str] = {}
+    for f in findings:
+        if f.get("file_path") and f.get("start_line"):
+            src = sandbox.read_source(
+                volume, f["file_path"], f["start_line"], f.get("end_line") or f["start_line"]
+            )
+            if src:
+                ctx[f["id"]] = src
+    return ctx
+
+
+def _triage(scan_id: str, findings: list[dict], contexts: dict, errors: list) -> None:
+    _set_status(scan_id, "triaging")
+    try:
+        verdicts = llm.triage(findings, contexts)
+    except Exception as exc:
+        errors.append(f"triage: {str(exc)[:500]}")
+        return
+    with SessionLocal() as session:
+        for f in findings:
+            v = verdicts.get(f["id"])
+            if not v:
+                continue
+            row = session.get(Finding, (f["id"], scan_id))
+            if row:
+                row.triaged_severity = v["triaged_severity"]
+                row.likely_false_positive = v["likely_false_positive"]
+                row.explanation = v["explanation"]
+                f["likely_false_positive"] = v["likely_false_positive"]  # for patch filter
+        session.commit()
+
+
+def _patch(scan_id: str, volume: str, findings: list[dict], contexts: dict,
+           errors: list) -> None:
+    _set_status(scan_id, "patching")
+    for f in findings:
+        if f.get("likely_false_positive"):  # skip likely FPs (BUILD_PLAN §5)
+            continue
+        try:
+            result = llm.generate_patch(f, contexts.get(f["id"]))
+        except Exception as exc:
+            errors.append(f"patch {f['id'][:8]}: {str(exc)[:200]}")
+            continue
+        patch = result.get("patch")
+        if patch and not sandbox.check_patch_applies(volume, patch):
+            # Present only patches we verified apply cleanly.
+            patch = None
+        with SessionLocal() as session:
+            row = session.get(Finding, (f["id"], scan_id))
+            if row:
+                row.suggested_patch = patch
+                row.patch_rationale = result.get("rationale")
+                session.commit()
+
+
 def run_scan(scan_id: str) -> None:
     init_db()
     with SessionLocal() as session:
@@ -48,6 +105,7 @@ def run_scan(scan_id: str) -> None:
         return
 
     volume = None
+    errors: list[str] = []
     try:
         _set_status(scan_id, "cloning")
         volume = sandbox.create_workspace(scan_id)
@@ -56,11 +114,31 @@ def run_scan(scan_id: str) -> None:
         _set_status(scan_id, "scanning", file_tree=tree)
 
         findings: list[dict] = []
-        semgrep_sarif = scanners.run_semgrep(volume)
-        findings += parse_sarif(semgrep_sarif, "semgrep")
+        # Each scanner is isolated: a failure in one shouldn't lose the others.
+        for name, runner in (
+            ("semgrep", scanners.run_semgrep),
+            ("trivy", scanners.run_trivy),
+            ("gitleaks", scanners.run_gitleaks),
+        ):
+            try:
+                sarif = runner(volume)
+                findings += parse_sarif(sarif, name)
+            except Exception as exc:
+                errors.append(f"{name}: {str(exc)[:500]}")
 
+        findings = dedupe(findings)
         _store_findings(scan_id, findings)
-        _set_status(scan_id, "completed")
+
+        if llm.available() and findings:
+            contexts = _gather_contexts(volume, findings)
+            _triage(scan_id, findings, contexts, errors)
+            _patch(scan_id, volume, findings, contexts, errors)
+
+        _set_status(
+            scan_id,
+            "completed",
+            error="; ".join(errors) if errors else None,
+        )
     except Exception as exc:
         _set_status(scan_id, "failed", error=str(exc)[:4000])
         raise

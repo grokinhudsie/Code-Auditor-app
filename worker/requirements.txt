@@ -3,3 +3,4 @@ rq==2.3.3
 sqlalchemy==2.0.41
 psycopg2-binary==2.9.10
 docker==7.1.0
+anthropic==0.69.0
