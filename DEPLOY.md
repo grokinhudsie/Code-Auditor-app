@@ -107,7 +107,40 @@ won't accept scans from anyone who doesn't have it. Remaining hardening:
   sensitive on it. The worker runs untrusted code in sandboxes. See
   `THREAT_MODEL.md`.
 
-## 7. Operations
+## 7. Local directory scans (local stack only)
+
+The "Local path" scan option copies a directory from the Docker host into the
+scan sandbox, so it only works when the whole stack runs on the same machine
+as the code (local `docker compose up`). **Leave `ALLOW_LOCAL_SCANS` unset on
+the droplet** — the API rejects local-path scans with 403 unless it's set, and
+the worker independently refuses them too.
+
+To use it locally:
+
+```bash
+# in .env
+ALLOW_LOCAL_SCANS=true
+SCAN_PATH_ROOT=/Users/you/projects   # optional: confine scannable paths
+```
+
+Notes:
+
+- On macOS the path must be under a Docker Desktop file-sharing root
+  (`/Users` is shared by default).
+- Non-git directories work too; gitleaks then scans file contents instead of
+  git history.
+- **Upgrading an existing database:** `init_db()` only creates tables, it
+  doesn't add columns. Either wipe (`docker compose down -v`) or run once:
+
+  ```sql
+  ALTER TABLE scans ADD COLUMN source_type VARCHAR(16) NOT NULL DEFAULT 'git';
+  ALTER TABLE scans ADD COLUMN local_path TEXT;
+  ALTER TABLE scans ALTER COLUMN git_url DROP NOT NULL;
+  ```
+
+  (e.g. `docker compose exec postgres psql -U vulnscanner -d vulnscanner`)
+
+## 8. Operations
 
 ```bash
 docker compose logs -f worker    # watch scans run

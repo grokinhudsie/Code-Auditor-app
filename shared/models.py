@@ -21,8 +21,11 @@ class Scan(Base):
     __tablename__ = "scans"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
-    git_url: Mapped[str] = mapped_column(Text)
-    # queued | cloning | scanning | triaging | patching | completed | failed
+    # source_type "git" scans git_url; "local" copies local_path off the docker host
+    source_type: Mapped[str] = mapped_column(String(16), default="git")
+    git_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    local_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # queued | cloning | copying | scanning | triaging | patching | completed | failed
     status: Mapped[str] = mapped_column(String(32), default="queued")
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     file_tree: Mapped[list | None] = mapped_column(JSON, nullable=True)
@@ -38,7 +41,9 @@ class Scan(Base):
     def to_dict(self, include_findings: bool = True) -> dict:
         data = {
             "id": self.id,
+            "source_type": self.source_type,
             "git_url": self.git_url,
+            "local_path": self.local_path,
             "status": self.status,
             "error": self.error,
             "file_tree": self.file_tree,

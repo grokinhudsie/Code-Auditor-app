@@ -11,6 +11,8 @@ services:
       REDIS_URL: redis://redis:6379/0
       FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:3000}
       API_TOKEN: ${API_TOKEN:-}
+      ALLOW_LOCAL_SCANS: ${ALLOW_LOCAL_SCANS:-}
+      SCAN_PATH_ROOT: ${SCAN_PATH_ROOT:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -31,6 +33,8 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-fable-5}
       ANTHROPIC_FALLBACK_MODEL: ${ANTHROPIC_FALLBACK_MODEL:-claude-opus-4-8}
+      ALLOW_LOCAL_SCANS: ${ALLOW_LOCAL_SCANS:-}
+      SCAN_PATH_ROOT: ${SCAN_PATH_ROOT:-}
     depends_on:
       postgres:
         condition: service_healthy

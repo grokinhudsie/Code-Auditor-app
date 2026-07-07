@@ -79,7 +79,9 @@ export default function ScanPage({
         <a href="/" className="text-sm text-neutral-500 hover:underline">
           ← New scan
         </a>
-        <h1 className="mt-2 break-all text-xl font-semibold">{scan.git_url}</h1>
+        <h1 className="mt-2 break-all text-xl font-semibold">
+          {scan.git_url ?? scan.local_path}
+        </h1>
         <div className="mt-2 flex items-center gap-2 text-sm">
           <StatusBadge status={scan.status} />
           {running && (

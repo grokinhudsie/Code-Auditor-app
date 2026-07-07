@@ -11,6 +11,7 @@ from redis import Redis
 from rq import Queue
 
 from shared.db import SessionLocal, init_db
+from shared.localpath import local_scans_enabled, validate_local_path
 from shared.models import Scan
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
@@ -81,7 +82,8 @@ def require_auth(request: Request) -> None:
 
 
 class ScanRequest(BaseModel):
-    git_url: str
+    git_url: str | None = None
+    local_path: str | None = None
 
 
 @app.get("/health")
@@ -92,12 +94,25 @@ def health() -> dict[str, str]:
 @app.post("/scans", status_code=202, dependencies=[Depends(require_auth)])
 def create_scan(req: ScanRequest, request: Request) -> dict:
     _rate_limit(request.client.host if request.client else "unknown")
-    url = req.git_url.strip()
-    if not GIT_URL_RE.match(url):
-        raise HTTPException(422, "git_url must be a plain https git URL")
+    if bool(req.git_url) == bool(req.local_path):
+        raise HTTPException(422, "provide exactly one of git_url or local_path")
+
+    if req.git_url:
+        url = req.git_url.strip()
+        if not GIT_URL_RE.match(url):
+            raise HTTPException(422, "git_url must be a plain https git URL")
+        scan_kwargs = {"source_type": "git", "git_url": url}
+    else:
+        if not local_scans_enabled():
+            raise HTTPException(403, "local scans are disabled (set ALLOW_LOCAL_SCANS)")
+        try:
+            path = validate_local_path(req.local_path)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+        scan_kwargs = {"source_type": "local", "local_path": path}
 
     with SessionLocal() as session:
-        scan = Scan(git_url=url, status="queued")
+        scan = Scan(status="queued", **scan_kwargs)
         session.add(scan)
         session.commit()
         scan_id = scan.id

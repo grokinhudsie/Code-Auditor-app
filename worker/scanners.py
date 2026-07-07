@@ -79,14 +79,16 @@ def run_trivy(volume_name: str) -> str:
     return read_result_file(volume_name, "trivy.sarif")
 
 
-def run_gitleaks(volume_name: str) -> str:
+def run_gitleaks(volume_name: str, git_mode: bool = True) -> str:
     """Dedicated secret scan. gitleaks exits 1 when leaks are found, which is
-    not an error for us (check=False)."""
+    not an error for us (check=False). git_mode=False scans file contents
+    instead of git history, for directories that aren't git repos."""
     sandbox.refresh_image(GITLEAKS_IMAGE)
     sandbox.run_sandboxed(
         GITLEAKS_IMAGE,
         command=[
             "detect",
+            *([] if git_mode else ["--no-git"]),
             "--source", "/workspace/repo",
             "--report-format", "sarif",
             "--report-path", "/workspace/results/gitleaks.sarif",

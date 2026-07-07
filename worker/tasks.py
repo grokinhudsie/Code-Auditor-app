@@ -3,6 +3,7 @@
 import re
 
 from shared.db import SessionLocal, init_db
+from shared.localpath import local_scans_enabled, validate_local_path
 from shared.models import Finding, Scan
 from shared.normalize import dedupe, parse_sarif
 from shared import llm
@@ -98,18 +99,36 @@ def run_scan(scan_id: str) -> None:
         scan = session.get(Scan, scan_id)
         if scan is None:
             raise RuntimeError(f"scan {scan_id} not found")
+        source_type = scan.source_type or "git"
         git_url = scan.git_url
+        local_path = scan.local_path
 
-    if not GIT_URL_RE.match(git_url):
+    # Re-validate the source here too (defense in depth vs a tampered DB row).
+    if source_type == "local":
+        if not local_scans_enabled():
+            _set_status(scan_id, "failed", error="local scans are disabled on this worker")
+            return
+        try:
+            local_path = validate_local_path(local_path or "")
+        except ValueError as exc:
+            _set_status(scan_id, "failed", error=f"invalid local path: {exc}")
+            return
+    elif not (git_url and GIT_URL_RE.match(git_url)):
         _set_status(scan_id, "failed", error="invalid git URL")
         return
 
     volume = None
     errors: list[str] = []
     try:
-        _set_status(scan_id, "cloning")
-        volume = sandbox.create_workspace(scan_id)
-        sandbox.clone_repo(volume, git_url)
+        if source_type == "local":
+            _set_status(scan_id, "copying")
+            volume = sandbox.create_workspace(scan_id)
+            sandbox.copy_local_dir(volume, local_path)
+        else:
+            _set_status(scan_id, "cloning")
+            volume = sandbox.create_workspace(scan_id)
+            sandbox.clone_repo(volume, git_url)
+        git_mode = sandbox.has_git_dir(volume)
         tree = sandbox.list_file_tree(volume)
         _set_status(scan_id, "scanning", file_tree=tree)
 
@@ -118,7 +137,7 @@ def run_scan(scan_id: str) -> None:
         for name, runner in (
             ("semgrep", scanners.run_semgrep),
             ("trivy", scanners.run_trivy),
-            ("gitleaks", scanners.run_gitleaks),
+            ("gitleaks", lambda v: scanners.run_gitleaks(v, git_mode=git_mode)),
         ):
             try:
                 sarif = runner(volume)

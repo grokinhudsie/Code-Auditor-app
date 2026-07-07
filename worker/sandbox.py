@@ -188,6 +188,53 @@ def clone_repo(volume_name: str, git_url: str) -> None:
     _enforce_repo_size(volume_name)
 
 
+def copy_local_dir(volume_name: str, host_path: str) -> None:
+    """Copy a directory from the docker HOST into /workspace/repo.
+
+    The path was validated by shared.localpath in both the API and the worker.
+    Runs as root with read caps because host files may not be readable by the
+    sandbox uid; the source mount is read-only, so the host stays untouched.
+    Note: if the path doesn't exist, the daemon auto-creates an empty dir at
+    the bind source — the emptiness check below turns that into a clean error.
+    """
+    max_mb = MAX_REPO_MB
+    script = (
+        'if [ ! -d /src ] || [ -z "$(ls -A /src)" ]; then '
+        'echo "local path not found or empty on host"; exit 1; fi; '
+        f'size=$(du -sm /src | cut -f1); if [ "$size" -gt {max_mb} ]; then '
+        f'echo "directory too large: ${{size}}MB > {max_mb}MB cap"; exit 1; fi; '
+        f'mkdir -p /workspace/repo && cp -a /src/. /workspace/repo/ && '
+        f'chown -R {SANDBOX_USER} /workspace/repo'
+    )
+    run_sandboxed(
+        CLONE_IMAGE,
+        entrypoint=["sh"],
+        command=["-c", script],
+        user="root",
+        volumes={
+            host_path: {"bind": "/src", "mode": "ro"},
+            volume_name: {"bind": "/workspace", "mode": "rw"},
+        },
+        mem_limit="512m",
+        timeout=600,
+        cap_add=["CHOWN", "DAC_OVERRIDE", "DAC_READ_SEARCH", "FOWNER"],
+    )
+    _enforce_repo_size(volume_name)
+
+
+def has_git_dir(volume_name: str) -> bool:
+    """True when /workspace/repo is a git repo (drives gitleaks mode)."""
+    code, _ = run_sandboxed(
+        CLONE_IMAGE,
+        entrypoint=["sh"],
+        command=["-c", "test -d /workspace/repo/.git"],
+        volumes={volume_name: {"bind": "/workspace", "mode": "ro"}},
+        timeout=60,
+        check=False,
+    )
+    return code == 0
+
+
 def _enforce_repo_size(volume_name: str) -> None:
     """Reject oversized repos (zip-bomb / disk-exhaustion guard, BUILD_PLAN §7)."""
     _, logs = run_sandboxed(

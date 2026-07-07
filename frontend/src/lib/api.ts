@@ -23,7 +23,9 @@ export type Finding = {
 
 export type Scan = {
   id: string;
-  git_url: string;
+  source_type: string;
+  git_url: string | null;
+  local_path: string | null;
   status: string;
   error: string | null;
   file_tree: string[] | null;
@@ -32,11 +34,13 @@ export type Scan = {
   findings: Finding[];
 };
 
-export async function createScan(gitUrl: string): Promise<{ scan_id: string }> {
+export type ScanSource = { git_url: string } | { local_path: string };
+
+export async function createScan(source: ScanSource): Promise<{ scan_id: string }> {
   const res = await fetch(`/api/scans`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ git_url: gitUrl }),
+    body: JSON.stringify(source),
   });
   if (!res.ok) {
     const detail = await res.json().catch(() => ({}));
