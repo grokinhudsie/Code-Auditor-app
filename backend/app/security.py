@@ -58,23 +58,43 @@ def clear_session_cookie(response: Response) -> None:
     response.delete_cookie(SESSION_COOKIE, path="/")
 
 
-def send_email_code(email: str, code: str) -> None:
+def send_email(to: str, subject: str, text: str) -> None:
     if not RESEND_API_KEY:
         # dev mode: no email provider configured
-        print(f"[auth] verification code for {email}: {code}", flush=True)
+        print(f"[auth] email to {to}: {subject}\n{text}", flush=True)
         return
     resp = httpx.post(
         "https://api.resend.com/emails",
         headers={"Authorization": f"Bearer {RESEND_API_KEY}"},
-        json={
-            "from": RESEND_FROM,
-            "to": [email],
-            "subject": f"{code} is your VulnScan verification code",
-            "text": (
-                f"Your VulnScan verification code is {code}.\n\n"
-                "It expires in 10 minutes. If you didn't request this, ignore this email."
-            ),
-        },
+        json={"from": RESEND_FROM, "to": [to], "subject": subject, "text": text},
         timeout=10,
     )
     resp.raise_for_status()
+
+
+def send_email_code(email: str, code: str) -> None:
+    if not RESEND_API_KEY:
+        # dev mode: keep this exact grep-able line
+        print(f"[auth] verification code for {email}: {code}", flush=True)
+        return
+    send_email(
+        email,
+        f"{code} is your VulnScan verification code",
+        (
+            f"Your VulnScan verification code is {code}.\n\n"
+            "It expires in 10 minutes. If you didn't request this, ignore this email."
+        ),
+    )
+
+
+def send_passkey_added_notice(email: str) -> None:
+    send_email(
+        email,
+        "A new passkey was added to your VulnScan account",
+        (
+            "A new passkey was just registered on your VulnScan account.\n\n"
+            "If this was you, no action is needed. If it wasn't, someone may "
+            "have access to your email: sign in, remove the passkey on the "
+            "Account page, and secure your mailbox."
+        ),
+    )

@@ -46,7 +46,10 @@ export function Header() {
               <Link href="/history" className="text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100">
                 History
               </Link>
-              <span className="flex items-center gap-2 text-neutral-500">
+              <Link
+                href="/account"
+                className="flex items-center gap-2 text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100"
+              >
                 {user.avatar_url && (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
@@ -56,7 +59,7 @@ export function Header() {
                   />
                 )}
                 {user.display_name ?? user.email}
-              </span>
+              </Link>
               <button
                 type="button"
                 onClick={onLogout}

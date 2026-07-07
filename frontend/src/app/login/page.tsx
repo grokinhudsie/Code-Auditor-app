@@ -17,7 +17,7 @@ const OAUTH_ERRORS: Record<string, string> = {
     "Your GitHub account has no verified primary email. Verify it on GitHub first.",
 };
 
-type Mode = "signin" | "signup";
+type Mode = "signin" | "signup" | "recover";
 type SignupStep = "email" | "code";
 
 function safeNext(next: string | null): string {
@@ -137,11 +137,24 @@ function LoginForm() {
           <button type="submit" disabled={busy} className={primaryClass}>
             {busy ? "Waiting for passkey…" : "Sign in with passkey"}
           </button>
+          <button
+            type="button"
+            onClick={() => switchMode("recover")}
+            className="w-full text-xs text-neutral-500 hover:underline"
+          >
+            Lost your passkey? Recover your account
+          </button>
         </form>
       )}
 
-      {mode === "signup" && step === "email" && (
+      {mode !== "signin" && step === "email" && (
         <form onSubmit={onRequestCode} className="space-y-2">
+          {mode === "recover" && (
+            <p className="text-sm text-neutral-500">
+              Enter your account email and we&apos;ll send a verification code
+              so you can set up a new passkey.
+            </p>
+          )}
           <input
             type="email"
             required
@@ -153,14 +166,33 @@ function LoginForm() {
           <button type="submit" disabled={busy} className={primaryClass}>
             {busy ? "Sending…" : "Email me a code"}
           </button>
+          {mode === "recover" && (
+            <button
+              type="button"
+              onClick={() => switchMode("signin")}
+              className="w-full text-xs text-neutral-500 hover:underline"
+            >
+              Back to sign in
+            </button>
+          )}
         </form>
       )}
 
-      {mode === "signup" && step === "code" && (
+      {mode !== "signin" && step === "code" && (
         <form onSubmit={onVerifyAndRegister} className="space-y-2">
           <p className="text-sm text-neutral-500">
-            We sent a 6-digit code to <b>{email.trim()}</b>. Enter it, then
-            your browser will ask you to create a passkey.
+            {mode === "recover" ? (
+              <>
+                We sent a 6-digit code to <b>{email.trim()}</b>. Enter it, then
+                your browser will ask you to create a <b>new</b> passkey. For
+                your security, your old sessions will be signed out.
+              </>
+            ) : (
+              <>
+                We sent a 6-digit code to <b>{email.trim()}</b>. Enter it, then
+                your browser will ask you to create a passkey.
+              </>
+            )}
           </p>
           <input
             type="text"

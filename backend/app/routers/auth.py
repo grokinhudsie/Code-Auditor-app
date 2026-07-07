@@ -10,6 +10,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel
+from sqlalchemy import delete
 from webauthn import (
     generate_authentication_options,
     generate_registration_options,
@@ -35,6 +36,7 @@ from app.deps import (
     rate_limit,
     redis_client,
     require_auth,
+    require_user,
 )
 from shared.db import SessionLocal
 from shared.models import AuthSession, User, WebAuthnCredential
@@ -75,11 +77,11 @@ class EmailVerifyRequest(BaseModel):
 
 
 class RegisterOptionsRequest(BaseModel):
-    registration_token: str
+    registration_token: str | None = None
 
 
 class RegisterVerifyRequest(BaseModel):
-    registration_token: str
+    registration_token: str | None = None
     credential: dict
 
 
@@ -142,16 +144,33 @@ def _email_for_reg_token(token: str) -> str:
     return email.decode()
 
 
+def _register_context(reg_token: str | None, user: User | None) -> tuple[str, str]:
+    """Resolve who a passkey registration is for: an email-verified
+    registration token (signup/recovery), or the logged-in session user
+    (adding a passkey). Returns (email, challenge redis key)."""
+    if reg_token:
+        return _email_for_reg_token(reg_token), f"wanchal:reg:{reg_token}"
+    if user is None:
+        raise HTTPException(401, "login required")
+    return user.email, f"wanchal:add:{user.id}"
+
+
 @router.post("/webauthn/register/options")
-def webauthn_register_options(req: RegisterOptionsRequest, request: Request) -> Response:
+def webauthn_register_options(
+    req: RegisterOptionsRequest,
+    request: Request,
+    user: User | None = Depends(get_current_user),
+) -> Response:
     check_origin(request)
-    email = _email_for_reg_token(req.registration_token)
+    email, challenge_key = _register_context(req.registration_token, user)
+    if not req.registration_token:
+        rate_limit("waadd-user", user.id, 10, 3600)
 
     with SessionLocal() as db:
-        user = db.query(User).filter(User.email == email).one_or_none()
+        owner = db.query(User).filter(User.email == email).one_or_none()
         existing = (
-            db.query(WebAuthnCredential).filter(WebAuthnCredential.user_id == user.id).all()
-            if user
+            db.query(WebAuthnCredential).filter(WebAuthnCredential.user_id == owner.id).all()
+            if owner
             else []
         )
 
@@ -168,18 +187,19 @@ def webauthn_register_options(req: RegisterOptionsRequest, request: Request) -> 
             resident_key=ResidentKeyRequirement.PREFERRED
         ),
     )
-    redis_client.setex(
-        f"wanchal:reg:{req.registration_token}", CHALLENGE_TTL, options.challenge
-    )
+    redis_client.setex(challenge_key, CHALLENGE_TTL, options.challenge)
     return Response(options_to_json(options), media_type="application/json")
 
 
 @router.post("/webauthn/register/verify")
-def webauthn_register_verify(req: RegisterVerifyRequest, request: Request) -> Response:
+def webauthn_register_verify(
+    req: RegisterVerifyRequest,
+    request: Request,
+    session_user: User | None = Depends(get_current_user),
+) -> Response:
     check_origin(request)
-    email = _email_for_reg_token(req.registration_token)
+    email, chal_key = _register_context(req.registration_token, session_user)
 
-    chal_key = f"wanchal:reg:{req.registration_token}"
     challenge = redis_client.get(chal_key)
     redis_client.delete(chal_key)  # single-use
     if challenge is None:
@@ -197,6 +217,9 @@ def webauthn_register_verify(req: RegisterVerifyRequest, request: Request) -> Re
 
     with SessionLocal() as db:
         user = db.query(User).filter(User.email == email).one_or_none()
+        # reg-token path onto an existing account = account recovery: the
+        # mailbox owner is reclaiming access, so other sessions get revoked
+        is_recovery = req.registration_token is not None and user is not None
         if user is None:
             user = User(email=email, email_verified=True)
             db.add(user)
@@ -204,22 +227,46 @@ def webauthn_register_verify(req: RegisterVerifyRequest, request: Request) -> Re
         else:
             # verified-email link rule: proving the mailbox attaches the passkey
             user.email_verified = True
-        db.merge(
-            WebAuthnCredential(
-                id=bytes_to_base64url(verification.credential_id),
-                user_id=user.id,
-                public_key=bytes_to_base64url(verification.credential_public_key),
-                sign_count=verification.sign_count,
-                transports=req.credential.get("response", {}).get("transports"),
-            )
-        )
-        token = security.create_session(db, user.id)
+
+        cred_id = bytes_to_base64url(verification.credential_id)
+        cred = db.get(WebAuthnCredential, cred_id)
+        if cred is None:
+            cred = WebAuthnCredential(id=cred_id, user_id=user.id)
+            db.add(cred)
+        # re-registered credential id: update in place so created_at survives
+        cred.user_id = user.id
+        cred.public_key = bytes_to_base64url(verification.credential_public_key)
+        cred.sign_count = verification.sign_count
+        cred.transports = req.credential.get("response", {}).get("transports")
+
+        token: str | None = None
+        if req.registration_token:
+            token = security.create_session(db, user.id)
+            if is_recovery:
+                # autoflush inserts the new session before this delete runs;
+                # the != clause is what keeps it alive
+                db.execute(
+                    delete(AuthSession).where(
+                        AuthSession.user_id == user.id,
+                        AuthSession.token_hash != hash_token(token),
+                    )
+                )
         payload = user.to_dict()
         db.commit()
 
-    redis_client.delete(f"regtok:{req.registration_token}")
+    if req.registration_token:
+        redis_client.delete(f"regtok:{req.registration_token}")
+
+    if is_recovery or req.registration_token is None:
+        # a failed notice must never fail a successful registration
+        try:
+            security.send_passkey_added_notice(email)
+        except Exception:
+            print(f"[auth] failed to send passkey-added notice to {email}", flush=True)
+
     response = JSONResponse({"user": payload})
-    security.set_session_cookie(response, token)
+    if token is not None:
+        security.set_session_cookie(response, token)
     return response
 
 
@@ -289,6 +336,70 @@ def webauthn_login_verify(req: LoginVerifyRequest, request: Request) -> Response
     response = JSONResponse({"user": payload})
     security.set_session_cookie(response, token)
     return response
+
+
+@router.get("/webauthn/credentials")
+def list_credentials(user: User = Depends(require_user)) -> dict:
+    with SessionLocal() as db:
+        creds = (
+            db.query(WebAuthnCredential)
+            .filter(WebAuthnCredential.user_id == user.id)
+            .order_by(WebAuthnCredential.created_at)
+            .all()
+        )
+        return {
+            "passkeys": [
+                {
+                    "id": c.id,
+                    "created_at": c.created_at.isoformat() if c.created_at else None,
+                    "last_used_at": c.last_used_at.isoformat() if c.last_used_at else None,
+                    "transports": c.transports,
+                }
+                for c in creds
+            ]
+        }
+
+
+@router.delete("/webauthn/credentials/{credential_id}", status_code=204)
+def delete_credential(
+    credential_id: str, request: Request, user: User = Depends(require_user)
+) -> None:
+    check_origin(request)
+    with SessionLocal() as db:
+        cred = db.get(WebAuthnCredential, credential_id)
+        if cred is None or cred.user_id != user.id:
+            raise HTTPException(404, "passkey not found")
+        count = (
+            db.query(WebAuthnCredential)
+            .filter(WebAuthnCredential.user_id == user.id)
+            .count()
+        )
+        # without a passkey or GitHub the only way back in is email recovery;
+        # keep at least one sign-in method attached
+        if count <= 1 and user.github_id is None:
+            raise HTTPException(
+                409,
+                "You can't remove your only passkey. Add another one (or link GitHub) first.",
+            )
+        db.delete(cred)
+        db.commit()
+
+
+@router.post("/sessions/revoke-others")
+def revoke_other_sessions(
+    request: Request, user: User = Depends(require_user)
+) -> dict:
+    check_origin(request)
+    token = request.cookies.get(SESSION_COOKIE)  # non-None: require_user passed
+    with SessionLocal() as db:
+        result = db.execute(
+            delete(AuthSession).where(
+                AuthSession.user_id == user.id,
+                AuthSession.token_hash != hash_token(token),
+            )
+        )
+        db.commit()
+    return {"revoked": result.rowcount}
 
 
 @router.get("/github/start")

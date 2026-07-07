@@ -2,7 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { proxyRequest } from "@/lib/backend";
 
 // Only known auth subpaths are proxied — this must not become an open proxy.
-const GET_PATHS = new Set(["github/start", "github/callback", "me"]);
+const GET_PATHS = new Set([
+  "github/start",
+  "github/callback",
+  "me",
+  "webauthn/credentials",
+]);
 const POST_PATHS = new Set([
   "email/code",
   "email/verify",
@@ -10,6 +15,7 @@ const POST_PATHS = new Set([
   "webauthn/register/verify",
   "webauthn/login/options",
   "webauthn/login/verify",
+  "sessions/revoke-others",
   "logout",
 ]);
 
@@ -40,4 +46,18 @@ export async function POST(
   { params }: { params: Promise<{ path: string[] }> }
 ) {
   return handle(req, params, POST_PATHS, await req.text());
+}
+
+export async function DELETE(
+  req: NextRequest,
+  { params }: { params: Promise<{ path: string[] }> }
+) {
+  const { path } = await params;
+  if (path.length !== 3 || path[0] !== "webauthn" || path[1] !== "credentials") {
+    return NextResponse.json({ detail: "not found" }, { status: 404 });
+  }
+  return proxyRequest(
+    req,
+    `/auth/webauthn/credentials/${encodeURIComponent(path[2])}`
+  );
 }

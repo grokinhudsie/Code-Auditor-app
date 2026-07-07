@@ -18,7 +18,9 @@ async function post(path: string, body?: object): Promise<Response> {
 async function orThrow(res: Response): Promise<Response> {
   if (!res.ok) {
     const detail = await res.json().catch(() => null);
-    throw new Error(detail?.detail ?? `Request failed (${res.status})`);
+    throw new Error(detail?.detail ?? `Request failed (${res.status})`, {
+      cause: res.status,
+    });
   }
   return res;
 }
@@ -47,24 +49,54 @@ export async function verifyEmailCode(
   return data.registration_token;
 }
 
+// With a registrationToken (from email verification): signup or account
+// recovery. Without one: adds a passkey to the logged-in session's account.
 export async function registerPasskey(
-  registrationToken: string
+  registrationToken?: string
 ): Promise<AuthUser> {
+  const tokenField = registrationToken
+    ? { registration_token: registrationToken }
+    : {};
   const optionsRes = await orThrow(
-    await post("/api/auth/webauthn/register/options", {
-      registration_token: registrationToken,
-    })
+    await post("/api/auth/webauthn/register/options", { ...tokenField })
   );
   const credential = await startRegistration({
     optionsJSON: await optionsRes.json(),
   });
   const verifyRes = await orThrow(
     await post("/api/auth/webauthn/register/verify", {
-      registration_token: registrationToken,
+      ...tokenField,
       credential,
     })
   );
   return (await verifyRes.json()).user;
+}
+
+export type Passkey = {
+  id: string;
+  created_at: string | null;
+  last_used_at: string | null;
+  transports: string[] | null;
+};
+
+export async function listPasskeys(): Promise<Passkey[]> {
+  const res = await orThrow(
+    await fetch("/api/auth/webauthn/credentials", { cache: "no-store" })
+  );
+  return (await res.json()).passkeys;
+}
+
+export async function deletePasskey(id: string): Promise<void> {
+  await orThrow(
+    await fetch(`/api/auth/webauthn/credentials/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    })
+  );
+}
+
+export async function revokeOtherSessions(): Promise<number> {
+  const res = await orThrow(await post("/api/auth/sessions/revoke-others"));
+  return (await res.json()).revoked;
 }
 
 export async function loginWithPasskey(email: string): Promise<AuthUser> {
