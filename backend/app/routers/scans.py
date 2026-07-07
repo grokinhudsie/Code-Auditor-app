@@ -2,6 +2,7 @@ import os
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
+from sqlalchemy import func, select
 
 from app.deps import (
     GIT_URL_RE,
@@ -10,11 +11,12 @@ from app.deps import (
     get_current_user,
     rate_limit,
     require_auth,
+    require_user,
     scan_queue,
 )
 from shared.db import SessionLocal
 from shared.localpath import local_scans_enabled, validate_local_path
-from shared.models import Scan, User
+from shared.models import Finding, Scan, User
 
 # Rate limit: N scan submissions per IP per window (BUILD_PLAN §7).
 RATE_LIMIT = int(os.environ.get("SCAN_RATE_LIMIT", "10"))
@@ -61,6 +63,40 @@ def create_scan(
     # enqueue by dotted name: the worker image owns tasks.py
     scan_queue().enqueue("tasks.run_scan", scan_id, job_timeout=SCAN_JOB_TIMEOUT)
     return {"scan_id": scan_id, "status": "queued"}
+
+
+@router.get("/scans")
+def list_scans(
+    user: User = Depends(require_user), limit: int = 200, offset: int = 0
+) -> dict:
+    """The logged-in user's scan history (no findings; counts only)."""
+    limit = max(1, min(limit, 500))
+    with SessionLocal() as session:
+        scans = (
+            session.query(Scan)
+            .filter(Scan.user_id == user.id)
+            .order_by(Scan.created_at.desc())
+            .limit(limit)
+            .offset(max(0, offset))
+            .all()
+        )
+        counts = dict(
+            session.execute(
+                select(Finding.scan_id, func.count())
+                .where(Finding.scan_id.in_([s.id for s in scans]))
+                .group_by(Finding.scan_id)
+            ).all()
+        ) if scans else {}
+        return {
+            "scans": [
+                {
+                    **s.to_dict(include_findings=False),
+                    "target": s.git_url or s.local_path,
+                    "finding_count": counts.get(s.id, 0),
+                }
+                for s in scans
+            ]
+        }
 
 
 @router.get("/scans/{scan_id}")

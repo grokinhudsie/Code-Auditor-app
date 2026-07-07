@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.deps import CORS_ORIGINS
-from app.routers import auth, scans
+from app.routers import auth, projects, scans
 from shared.db import init_db
 
 
@@ -31,3 +31,4 @@ def health() -> dict[str, str]:
 
 app.include_router(scans.router)
 app.include_router(auth.router)
+app.include_router(projects.router)
