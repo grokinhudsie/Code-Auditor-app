@@ -4,3 +4,5 @@ redis==5.2.1
 rq==2.3.3
 sqlalchemy==2.0.41
 psycopg2-binary==2.9.10
+httpx==0.28.1
+webauthn==2.7.0

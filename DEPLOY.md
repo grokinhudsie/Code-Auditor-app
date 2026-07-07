@@ -45,7 +45,20 @@ curl -s http://localhost:8000/health   # {"status":"ok"}
 ANTHROPIC_API_KEY=sk-ant-...            # required for LLM triage/patches
 ANTHROPIC_MODEL=claude-fable-5          # claude-mythos-5 only with Glasswing access
 API_TOKEN=<paste output of: openssl rand -hex 32>   # protects the API
+FRONTEND_ORIGIN=https://your-app.vercel.app         # required for sign-in
+
+# Sign-in (optional — without these, accounts are unavailable but anonymous
+# scanning still works):
+GITHUB_CLIENT_ID=...                    # GitHub OAuth app (see below)
+GITHUB_CLIENT_SECRET=...
+RESEND_API_KEY=re_...                   # sends email verification codes
+RESEND_FROM=VulnScan <auth@yourdomain.com>   # domain must be verified in Resend
 ```
+
+For sign-in, `FRONTEND_ORIGIN`'s **first** entry is canonical: it determines
+the WebAuthn relying-party ID and the GitHub OAuth callback. Create the GitHub
+OAuth app at <https://github.com/settings/developers> with callback URL
+`https://your-app.vercel.app/api/auth/github/callback`.
 
 Generate the token once on the droplet:
 
@@ -99,10 +112,14 @@ anyone hitting the droplet directly without it gets 401.
 The API requires the `API_TOKEN` bearer token (set it — see §3), so the droplet
 won't accept scans from anyone who doesn't have it. Remaining hardening:
 
-- **Anyone who can load your Vercel page can still submit scans** (the proxy
-  submits on their behalf). If the app should be private to you, add a login/
-  password gate on the frontend (e.g. Vercel's password protection, or a Basic-
-  Auth middleware) so only you can reach it.
+- **Anyone who can load your Vercel page can still submit scans anonymously**
+  (the proxy submits on their behalf; anonymous scans are rate-limited per
+  client IP). Sign-in (GitHub / email+passkey) adds identity and per-user scan
+  history, but does not gate scanning. If the app should be private to you,
+  add Vercel's password protection in front of the whole site.
+- Scan result pages are **capability URLs**: anyone with a `/scans/{id}` link
+  can read that result (ids are unguessable 32-hex). Deliberate, to keep
+  results shareable — don't paste links where you wouldn't paste the findings.
 - Treat the droplet as disposable and isolated — don't run anything else
   sensitive on it. The worker runs untrusted code in sandboxes. See
   `THREAT_MODEL.md`.
@@ -129,8 +146,11 @@ Notes:
   (`/Users` is shared by default).
 - Non-git directories work too; gitleaks then scans file contents instead of
   git history.
-- **Upgrading an existing database:** `init_db()` only creates tables, it
-  doesn't add columns. Either wipe (`docker compose down -v`) or run once:
+- **Upgrading an existing database:** automatic. `init_db()` creates missing
+  tables and then applies the idempotent column migrations in
+  `shared/db.py:MIGRATIONS` on every boot, so `docker compose up -d --build`
+  after a `git pull` is all you need. (One exception: databases created before
+  the local-scans feature also need, once:
 
   ```sql
   ALTER TABLE scans ADD COLUMN source_type VARCHAR(16) NOT NULL DEFAULT 'git';
@@ -138,7 +158,7 @@ Notes:
   ALTER TABLE scans ALTER COLUMN git_url DROP NOT NULL;
   ```
 
-  (e.g. `docker compose exec postgres psql -U vulnscanner -d vulnscanner`)
+  via `docker compose exec postgres psql -U vulnscanner -d vulnscanner`.)
 
 ## 8. Operations
 

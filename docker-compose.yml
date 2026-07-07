@@ -13,6 +13,12 @@ services:
       API_TOKEN: ${API_TOKEN:-}
       ALLOW_LOCAL_SCANS: ${ALLOW_LOCAL_SCANS:-}
       SCAN_PATH_ROOT: ${SCAN_PATH_ROOT:-}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      RESEND_FROM: ${RESEND_FROM:-}
+      WEBAUTHN_RP_ID: ${WEBAUTHN_RP_ID:-}
+      SESSION_TTL_DAYS: ${SESSION_TTL_DAYS:-30}
     depends_on:
       postgres:
         condition: service_healthy

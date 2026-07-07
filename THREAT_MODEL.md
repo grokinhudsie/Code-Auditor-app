@@ -8,6 +8,10 @@ defend against, how, and what remains out of scope.
 
 - The host running the worker and the Docker daemon.
 - The Postgres database (scan history, findings — including redacted secrets).
+- **User account data**: emails, GitHub ids, WebAuthn public keys, session
+  hashes. No passwords are stored (passkeys + OAuth only), session cookies are
+  stored only as SHA-256 hashes, and the GitHub OAuth access token is used
+  once and discarded.
 - The Anthropic API key used for triage/patch generation.
 - Availability of the service for other users.
 
@@ -37,6 +41,8 @@ worker process.
 | T9 | Stale scanner databases silently miss recent CVEs | Scanner images and vuln DBs are **refreshed before every scan** (`refresh_image`, Trivy DB pull). |
 | T10 | Docker socket access from the worker is itself powerful | The worker holds the docker socket to spawn sandboxes; it does not run untrusted code itself. Treat the worker as trusted and isolate it from the API's request path (separate container). |
 | T11 | Prompt injection in repo content steering the LLM | The LLM only triages/explains and proposes diffs that are validated before display; it has no tools and cannot act. Worst case is a misleading explanation, not code execution. |
+| T12 | Session/account attacks (CSRF, session theft, credential stuffing) | Sessions are httpOnly `SameSite=Lax` cookies with only their **SHA-256 hash** stored server-side; state-changing routes also check the `Origin` header. No passwords exist to stuff — auth is WebAuthn (phishing-resistant, challenges single-use with 5-min TTL) or GitHub OAuth (CSRF-protected by a `state` cookie; redirect target validated against open redirects). Auth endpoints are rate-limited per real client IP, and verification codes allow 5 attempts before invalidation. |
+| T13 | Scan-result disclosure via leaked links | `GET /scans/{id}` is deliberately a **capability URL** (unguessable 32-hex id, readable by any link-holder) to keep results shareable and anonymous scans usable. Only the per-user history listing is authenticated. Treat a result link as containing the findings themselves. |
 
 ## Residual risk / out of scope
 
