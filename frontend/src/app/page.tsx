@@ -43,7 +43,7 @@ export default function Home() {
     }`;
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-2xl flex-col justify-center px-6">
+    <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col justify-center px-6">
       <h1 className="text-3xl font-bold tracking-tight">VulnScan Code Auditor</h1>
       <p className="mt-2 text-neutral-500">
         Scan a public git repository or a locally stored repo with Trivy,
