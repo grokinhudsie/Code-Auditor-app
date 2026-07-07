@@ -23,7 +23,11 @@ GITHUB_CLIENT_ID = os.environ.get("GITHUB_CLIENT_ID", "")
 GITHUB_CLIENT_SECRET = os.environ.get("GITHUB_CLIENT_SECRET", "")
 
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
-RESEND_FROM = os.environ.get("RESEND_FROM") or "VulnScan <onboarding@resend.dev>"
+FROM_EMAIL_NAME = os.environ.get("FROM_EMAIL_NAME") or "VulnScan"
+# RESEND_FROM is the sending address; a full "Name <addr>" value also works
+# (used as-is, FROM_EMAIL_NAME ignored) for backward compatibility.
+_from_addr = os.environ.get("RESEND_FROM") or "onboarding@resend.dev"
+RESEND_FROM = _from_addr if "<" in _from_addr else f"{FROM_EMAIL_NAME} <{_from_addr}>"
 
 
 def create_session(db: DbSession, user_id: str) -> str:

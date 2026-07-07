@@ -52,7 +52,8 @@ FRONTEND_ORIGIN=https://your-app.vercel.app         # required for sign-in
 GITHUB_CLIENT_ID=...                    # GitHub OAuth app (see below)
 GITHUB_CLIENT_SECRET=...
 RESEND_API_KEY=re_...                   # sends email verification codes
-RESEND_FROM=VulnScan <auth@yourdomain.com>   # domain must be verified in Resend
+RESEND_FROM=auth@yourdomain.com         # sending address; domain must be verified in Resend
+FROM_EMAIL_NAME=VulnScan                # display name shown in inboxes
 ```
 
 For sign-in, `FRONTEND_ORIGIN`'s **first** entry is canonical: it determines
