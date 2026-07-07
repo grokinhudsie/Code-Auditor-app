@@ -1,4 +1,4 @@
-# VulnScanner — Threat Model
+# VulnScan Code Auditor — Threat Model
 
 The core risk: **we execute security scanners over untrusted, attacker-supplied
 code.** A submitted repository is hostile input. This document states what we

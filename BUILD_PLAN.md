@@ -1,4 +1,4 @@
-# VulnScanner — Build Plan
+# VulnScan Code Auditor — Build Plan
 
 A web app that ingests a website codebase, runs it through best-in-class open-source
 security scanners, and uses an LLM to triage findings and suggest patches.

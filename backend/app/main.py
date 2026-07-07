@@ -46,7 +46,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="VulnScanner API", lifespan=lifespan)
+app = FastAPI(title="VulnScan Code Auditor API", lifespan=lifespan)
 
 # Comma-separated allowed frontend origins (e.g. your Vercel URL in production).
 CORS_ORIGINS = [

@@ -1,4 +1,4 @@
-# Deploying VulnScanner
+# Deploying VulnScan Code Auditor
 
 **Architecture:** frontend on Vercel, backend (API + worker + Redis + Postgres)
 on a single DigitalOcean droplet running Docker Compose. The worker sandboxes
