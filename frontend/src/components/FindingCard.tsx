@@ -1,7 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import type { Finding } from "@/lib/api";
+import type { Finding, Scan } from "@/lib/api";
+import { CopyButton } from "@/components/CopyButton";
+import { ExportMenu } from "@/components/ExportMenu";
 
 const SEV_COLOR: Record<string, string> = {
   critical: "bg-red-600 text-white",
@@ -29,7 +31,7 @@ function DiffView({ patch }: { patch: string }) {
   );
 }
 
-export function FindingCard({ finding }: { finding: Finding }) {
+export function FindingCard({ finding, scan }: { finding: Finding; scan: Scan }) {
   const [open, setOpen] = useState(false);
   const sev = finding.triaged_severity ?? finding.raw_severity;
 
@@ -88,9 +90,12 @@ export function FindingCard({ finding }: { finding: Finding }) {
 
           {finding.suggested_patch && (
             <div>
-              <p className="mb-1 text-xs font-semibold text-neutral-500">
-                Suggested fix (verified to apply cleanly — review before using):
-              </p>
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <p className="text-xs font-semibold text-neutral-500">
+                  Suggested fix (verified to apply cleanly — review before using):
+                </p>
+                <CopyButton text={finding.suggested_patch} label="Copy patch" />
+              </div>
               <DiffView patch={finding.suggested_patch} />
               {finding.patch_rationale && (
                 <p className="mt-2 text-xs text-neutral-500">
@@ -116,6 +121,10 @@ export function FindingCard({ finding }: { finding: Finding }) {
               ))}
             </ul>
           )}
+
+          <div className="flex justify-end">
+            <ExportMenu scan={scan} findings={[finding]} label="Export finding" />
+          </div>
         </div>
       )}
     </div>

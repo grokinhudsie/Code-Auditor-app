@@ -1,8 +1,11 @@
 "use client";
 
 import { use, useEffect, useState } from "react";
-import { getScan, type Scan, type Finding } from "@/lib/api";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { createScan, getScan, type Scan, type Finding } from "@/lib/api";
 import { FindingCard } from "@/components/FindingCard";
+import { ExportMenu } from "@/components/ExportMenu";
 
 const TERMINAL = new Set(["completed", "failed"]);
 const SEVERITY_ORDER = ["critical", "high", "medium", "low", "info"];
@@ -31,6 +34,9 @@ export default function ScanPage({
   const { id } = use(params);
   const [scan, setScan] = useState<Scan | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [rescanning, setRescanning] = useState(false);
+  const [rescanError, setRescanError] = useState<string | null>(null);
+  const router = useRouter();
 
   useEffect(() => {
     let active = true;
@@ -66,6 +72,21 @@ export default function ScanPage({
   const real = scan.findings.filter((f) => !f.likely_false_positive);
   const falsePositives = scan.findings.filter((f) => f.likely_false_positive);
 
+  async function rescan() {
+    if (!scan) return;
+    setRescanError(null);
+    setRescanning(true);
+    try {
+      const { scan_id } = await createScan(
+        scan.git_url ? { git_url: scan.git_url } : { local_path: scan.local_path! }
+      );
+      router.push(`/scans/${scan_id}`);
+    } catch (err) {
+      setRescanError(err instanceof Error ? err.message : "Rescan failed");
+      setRescanning(false);
+    }
+  }
+
   const byCategory = new Map<string, Finding[]>();
   for (const f of real) {
     const list = byCategory.get(f.category) ?? [];
@@ -76,9 +97,9 @@ export default function ScanPage({
   return (
     <Shell>
       <div className="mb-6">
-        <a href="/" className="text-sm text-neutral-500 hover:underline">
+        <Link href="/" className="text-sm text-neutral-500 hover:underline">
           ← New scan
-        </a>
+        </Link>
         <h1 className="mt-2 break-all text-xl font-semibold">
           {scan.git_url ?? scan.local_path}
         </h1>
@@ -94,6 +115,22 @@ export default function ScanPage({
             {scan.findings.length === 1 ? "" : "s"}
           </span>
         </div>
+        <div className="mt-3 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={rescan}
+            disabled={rescanning || running}
+            className="rounded border border-neutral-300 px-2 py-1 text-xs font-medium text-neutral-600 hover:bg-neutral-100 disabled:opacity-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+          >
+            {rescanning ? "Starting…" : "Rescan"}
+          </button>
+          {!running && real.length > 0 && (
+            <ExportMenu scan={scan} findings={real} label="Download all findings" />
+          )}
+        </div>
+        {rescanError && (
+          <p className="mt-2 text-xs text-red-600">{rescanError}</p>
+        )}
         {scan.error && (
           <p className="mt-2 rounded bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950 dark:text-amber-300">
             {scan.error}
@@ -112,7 +149,7 @@ export default function ScanPage({
           </h2>
           <div className="space-y-3">
             {findings.sort(sortFindings).map((f) => (
-              <FindingCard key={f.id} finding={f} />
+              <FindingCard key={f.id} finding={f} scan={scan} />
             ))}
           </div>
         </section>
@@ -126,7 +163,7 @@ export default function ScanPage({
           </summary>
           <div className="mt-3 space-y-3 opacity-70">
             {falsePositives.sort(sortFindings).map((f) => (
-              <FindingCard key={f.id} finding={f} />
+              <FindingCard key={f.id} finding={f} scan={scan} />
             ))}
           </div>
         </details>
