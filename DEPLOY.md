@@ -131,7 +131,9 @@ The "Local path" scan option copies a directory from the Docker host into the
 scan sandbox, so it only works when the whole stack runs on the same machine
 as the code (local `docker compose up`). **Leave `ALLOW_LOCAL_SCANS` unset on
 the droplet** — the API rejects local-path scans with 403 unless it's set, and
-the worker independently refuses them too.
+the worker independently refuses them too. The UI asks the backend
+(`GET /capabilities`) and hides the "Local path" tab and the rescan button for
+local targets when it's off, so the option is never offered where it would fail.
 
 To use it locally:
 

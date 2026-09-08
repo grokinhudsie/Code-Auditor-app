@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import {
   createScan,
   deleteProject,
+  getCapabilities,
   listProjects,
   listScans,
   upsertProject,
@@ -36,10 +37,12 @@ function StatusBadge({ status }: { status: string }) {
 
 function GroupCard({
   group,
+  localAllowed,
   onChanged,
   onError,
 }: {
   group: Group;
+  localAllowed: boolean | null;
   onChanged: () => void;
   onError: (message: string) => void;
 }) {
@@ -88,6 +91,10 @@ function GroupCard({
       router.push(`/scans/${scan_id}`);
     });
   }
+
+  // Rescanning a local target re-submits local_path, which the backend rejects
+  // unless local scans are enabled there.
+  const canRescan = group.sourceType === "git" || localAllowed === true;
 
   return (
     <section className="rounded-lg border border-neutral-200 dark:border-neutral-800">
@@ -147,14 +154,16 @@ function GroupCard({
                 Remove label
               </button>
             )}
-            <button
-              type="button"
-              onClick={rescan}
-              disabled={busy}
-              className="rounded border border-neutral-300 px-2 py-1 text-xs font-medium text-neutral-600 hover:bg-neutral-100 disabled:opacity-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
-            >
-              {busy ? "…" : "Rescan"}
-            </button>
+            {canRescan && (
+              <button
+                type="button"
+                onClick={rescan}
+                disabled={busy}
+                className="rounded border border-neutral-300 px-2 py-1 text-xs font-medium text-neutral-600 hover:bg-neutral-100 disabled:opacity-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+              >
+                {busy ? "…" : "Rescan"}
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -187,6 +196,7 @@ export default function HistoryPage() {
   const [groups, setGroups] = useState<Group[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refresh, setRefresh] = useState(0);
+  const [localAllowed, setLocalAllowed] = useState<boolean | null>(null);
   const router = useRouter();
 
   useEffect(() => {
@@ -222,6 +232,16 @@ export default function HistoryPage() {
     };
   }, [refresh, router]);
 
+  useEffect(() => {
+    let active = true;
+    getCapabilities().then((caps) => {
+      if (active) setLocalAllowed(caps.local_scans);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
   return (
     <main className="mx-auto w-full max-w-3xl px-6 py-10">
       <h1 className="text-xl font-semibold">Scan history</h1>
@@ -248,6 +268,7 @@ export default function HistoryPage() {
           <GroupCard
             key={g.target}
             group={g}
+            localAllowed={localAllowed}
             onChanged={() => setRefresh((n) => n + 1)}
             onError={setError}
           />

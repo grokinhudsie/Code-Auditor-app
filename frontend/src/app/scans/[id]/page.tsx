@@ -3,7 +3,13 @@
 import { use, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { createScan, getScan, type Scan, type Finding } from "@/lib/api";
+import {
+  createScan,
+  getCapabilities,
+  getScan,
+  type Scan,
+  type Finding,
+} from "@/lib/api";
 import { FindingCard } from "@/components/FindingCard";
 import { ExportMenu } from "@/components/ExportMenu";
 
@@ -36,6 +42,7 @@ export default function ScanPage({
   const [error, setError] = useState<string | null>(null);
   const [rescanning, setRescanning] = useState(false);
   const [rescanError, setRescanError] = useState<string | null>(null);
+  const [localAllowed, setLocalAllowed] = useState<boolean | null>(null);
   const router = useRouter();
 
   useEffect(() => {
@@ -61,6 +68,16 @@ export default function ScanPage({
     };
   }, [id]);
 
+  useEffect(() => {
+    let active = true;
+    getCapabilities().then((caps) => {
+      if (active) setLocalAllowed(caps.local_scans);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
   if (error) {
     return <Shell><p className="text-red-600">{error}</p></Shell>;
   }
@@ -71,6 +88,9 @@ export default function ScanPage({
   const running = !TERMINAL.has(scan.status);
   const real = scan.findings.filter((f) => !f.likely_false_positive);
   const falsePositives = scan.findings.filter((f) => f.likely_false_positive);
+  // Rescanning a local target re-submits local_path, which the backend
+  // rejects unless local scans are enabled there.
+  const canRescan = scan.git_url ? true : localAllowed === true;
 
   async function rescan() {
     if (!scan) return;
@@ -116,14 +136,16 @@ export default function ScanPage({
           </span>
         </div>
         <div className="mt-3 flex items-center gap-2">
-          <button
-            type="button"
-            onClick={rescan}
-            disabled={rescanning || running}
-            className="rounded border border-neutral-300 px-2 py-1 text-xs font-medium text-neutral-600 hover:bg-neutral-100 disabled:opacity-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
-          >
-            {rescanning ? "Starting…" : "Rescan"}
-          </button>
+          {canRescan && (
+            <button
+              type="button"
+              onClick={rescan}
+              disabled={rescanning || running}
+              className="rounded border border-neutral-300 px-2 py-1 text-xs font-medium text-neutral-600 hover:bg-neutral-100 disabled:opacity-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+            >
+              {rescanning ? "Starting…" : "Rescan"}
+            </button>
+          )}
           {!running && real.length > 0 && (
             <ExportMenu scan={scan} findings={real} label="Download all findings" />
           )}

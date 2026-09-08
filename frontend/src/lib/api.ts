@@ -41,6 +41,10 @@ export type ScanSummary = Omit<Scan, "findings"> & {
   finding_count: number;
 };
 
+export type Capabilities = {
+  local_scans: boolean;
+};
+
 export type Project = {
   id: string;
   name: string;
@@ -56,6 +60,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     });
   }
   return res.status === 204 ? (undefined as T) : res.json();
+}
+
+// Local scans need ALLOW_LOCAL_SCANS on the backend; treat any failure as
+// "off" so the UI never offers a source the backend would reject with 403.
+export async function getCapabilities(): Promise<Capabilities> {
+  try {
+    return await request<Capabilities>(`/api/capabilities`);
+  } catch {
+    return { local_scans: false };
+  }
 }
 
 export async function createScan(source: ScanSource): Promise<{ scan_id: string }> {
