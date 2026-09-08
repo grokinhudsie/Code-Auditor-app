@@ -298,21 +298,31 @@ for info in infos:
         entry = zf.open(info)
     except RuntimeError:
         sys.exit("password-protected archives are not supported")
+    except (zipfile.BadZipFile, EOFError, OSError, zlib.error) as exc:
+        sys.exit("unreadable entry %s: %s" % (original, exc))
     try:
-        with entry, open(target, "wb") as out:
-            while True:
+        out = open(target, "wb")
+    except OSError as exc:
+        sys.exit("could not write %s: %s" % (name, exc))
+    # Read and write failures are reported separately: they mean completely
+    # different things (a bad archive vs. a bad destination) and lumping them
+    # together makes the error useless. SystemExit is a BaseException, so the
+    # budget check still propagates through these handlers.
+    with entry, out:
+        while True:
+            try:
                 chunk = entry.read(65536)
-                if not chunk:
-                    break
-                budget -= len(chunk)
-                if budget < 0:
-                    sys.exit("archive expands beyond the %dMB cap" % max_mb)
+            except (zipfile.BadZipFile, EOFError, zlib.error) as exc:
+                sys.exit("corrupt entry %s: %s" % (original, exc))
+            if not chunk:
+                break
+            budget -= len(chunk)
+            if budget < 0:
+                sys.exit("archive expands beyond the %dMB cap" % max_mb)
+            try:
                 out.write(chunk)
-    except (zipfile.BadZipFile, EOFError, OSError, zlib.error):
-        # truncated, CRC-mismatched or otherwise corrupt entry (a bomb with a
-        # falsified header lands here); SystemExit is a BaseException so the
-        # budget check above still propagates
-        sys.exit("corrupt entry in archive: %s" % original)
+            except OSError as exc:
+                sys.exit("could not write %s: %s" % (name, exc))
 """
 
 

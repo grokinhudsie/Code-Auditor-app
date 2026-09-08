@@ -22,6 +22,21 @@ export const EXCLUDED_DIRS = new Set([
   "vendor",
   ".cache",
   "coverage",
+  // Local databases and tool state: not source, often large, and their binary
+  // files are exactly what a code scanner has nothing useful to say about.
+  ".pglite",
+  ".wrangler",
+  ".svelte-kit",
+  ".astro",
+  ".nuxt",
+  ".output",
+  ".parcel-cache",
+  ".pytest_cache",
+  ".mypy_cache",
+  ".ruff_cache",
+  ".gradle",
+  ".terraform",
+  "Pods",
 ]);
 
 export type ZipResult = {
