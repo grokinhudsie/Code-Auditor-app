@@ -15,11 +15,12 @@ engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 
 # create_all only creates missing TABLES; columns added to existing tables ship
-# here as idempotent DDL so upgrades are automatic on boot (DEPLOY.md §7).
+# here as idempotent DDL so upgrades are automatic on boot (DEPLOY.md §8).
 MIGRATIONS = [
     "ALTER TABLE scans ADD COLUMN IF NOT EXISTS user_id VARCHAR(32) "
     "REFERENCES users(id) ON DELETE SET NULL",
     "CREATE INDEX IF NOT EXISTS ix_scans_user_created ON scans (user_id, created_at DESC)",
+    "ALTER TABLE scans ADD COLUMN IF NOT EXISTS upload_name TEXT",
 ]
 
 _MIGRATION_LOCK = 421_337  # arbitrary app-wide advisory lock id

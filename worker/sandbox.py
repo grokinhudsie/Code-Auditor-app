@@ -7,11 +7,20 @@ inherently needs egress (git clone, scanner DB refresh).
 """
 
 import os
+import re
 
 import docker
 import requests
 
 CLONE_IMAGE = "alpine/git:2.47.2"
+# Unpacking uses python rather than busybox unzip: busybox recreates symlink
+# entries, which reopens zip-slip via a "link -> /workspace" entry followed by
+# writes through it. The script below refuses symlinks outright.
+UNPACK_IMAGE = "python:3.12-alpine"
+UPLOADS_VOLUME = os.environ.get("UPLOADS_VOLUME", "vulnscan-uploads")
+MAX_ZIP_ENTRIES = int(os.environ.get("MAX_ZIP_ENTRIES", "20000"))
+
+_SCAN_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
 SANDBOX_USER = "1000:1000"
 DEFAULT_MEM = "1g"
@@ -218,6 +227,125 @@ def copy_local_dir(volume_name: str, host_path: str) -> None:
         mem_limit="512m",
         timeout=600,
         cap_add=["CHOWN", "DAC_OVERRIDE", "DAC_READ_SEARCH", "FOWNER"],
+    )
+    _enforce_repo_size(volume_name)
+
+
+_UNPACK_SCRIPT = r"""
+import os, stat, sys, zipfile, zlib
+
+src, dest = sys.argv[1], sys.argv[2]
+max_mb, max_entries = int(sys.argv[3]), int(sys.argv[4])
+budget = max_mb * 1024 * 1024
+
+try:
+    zf = zipfile.ZipFile(src)
+except (zipfile.BadZipFile, OSError):
+    sys.exit("not a valid zip archive")
+
+infos = [
+    i for i in zf.infolist()
+    if not i.filename.startswith("__MACOSX/")
+    and os.path.basename(i.filename) != ".DS_Store"
+]
+if not infos:
+    sys.exit("archive is empty")
+if len(infos) > max_entries:
+    sys.exit("archive has too many entries: %d > %d" % (len(infos), max_entries))
+
+# Cheap precheck on declared sizes. Headers can lie, so the real defense is the
+# shrinking budget in the copy loop below.
+declared = sum(i.file_size for i in infos)
+if declared > budget:
+    sys.exit("archive expands to %dMB, over the %dMB cap" % (declared // 1048576, max_mb))
+
+# GitHub's "Download ZIP" wraps everything in <repo>-<branch>/. Strip a single
+# shared top-level directory so finding paths match the user's own tree.
+tops = {i.filename.split("/", 1)[0] for i in infos}
+strip = len(tops) == 1 and any("/" in i.filename for i in infos)
+
+dest_real = os.path.realpath(dest)
+os.makedirs(dest_real, exist_ok=True)
+
+for info in infos:
+    original = info.filename
+    mode = info.external_attr >> 16
+    unix = info.create_system == 3
+    if unix and stat.S_ISLNK(mode):
+        sys.exit("archive contains a symlink: %s" % original)
+    if "\\" in original or original.startswith("/") or ".." in original.split("/"):
+        sys.exit("unsafe path in archive: %s" % original)
+
+    name = original.split("/", 1)[1] if strip and "/" in original else original
+    if not name or name == original and strip:
+        continue
+
+    target = os.path.realpath(os.path.join(dest_real, name))
+    if target != dest_real and not target.startswith(dest_real + os.sep):
+        sys.exit("unsafe path in archive: %s" % original)
+
+    if info.is_dir():
+        os.makedirs(target, exist_ok=True)
+        continue
+    # Many writers store permission bits with no file-type bits at all, so only
+    # judge the type when S_IFMT actually says something.
+    ftype = stat.S_IFMT(mode)
+    if unix and ftype and ftype != stat.S_IFREG:
+        sys.exit("archive contains a special file: %s" % original)
+
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    try:
+        entry = zf.open(info)
+    except RuntimeError:
+        sys.exit("password-protected archives are not supported")
+    try:
+        with entry, open(target, "wb") as out:
+            while True:
+                chunk = entry.read(65536)
+                if not chunk:
+                    break
+                budget -= len(chunk)
+                if budget < 0:
+                    sys.exit("archive expands beyond the %dMB cap" % max_mb)
+                out.write(chunk)
+    except (zipfile.BadZipFile, EOFError, OSError, zlib.error):
+        # truncated, CRC-mismatched or otherwise corrupt entry (a bomb with a
+        # falsified header lands here); SystemExit is a BaseException so the
+        # budget check above still propagates
+        sys.exit("corrupt entry in archive: %s" % original)
+"""
+
+
+def unpack_zip(volume_name: str, scan_id: str) -> None:
+    """Extract an uploaded archive into /workspace/repo.
+
+    The archive is untrusted and nothing outside a sandbox ever opens it: the
+    API only counts bytes on the way in, and the worker only unlinks the file
+    afterwards. The extractor refuses symlinks, traversal paths and special
+    files, and copies with a shrinking byte budget so a bomb dies mid-stream
+    instead of after filling the volume. Runs non-root with no added caps --
+    create_workspace already chowned /workspace to the sandbox uid.
+    """
+    if not _SCAN_ID_RE.match(scan_id):
+        raise SandboxError(f"invalid scan id: {scan_id}")
+    run_sandboxed(
+        UNPACK_IMAGE,
+        entrypoint=["python3"],
+        command=[
+            "-c",
+            _UNPACK_SCRIPT,
+            f"/upload/{scan_id}.zip",
+            "/workspace/repo",
+            str(MAX_REPO_MB),
+            str(MAX_ZIP_ENTRIES),
+        ],
+        volumes={
+            UPLOADS_VOLUME: {"bind": "/upload", "mode": "ro"},
+            volume_name: {"bind": "/workspace", "mode": "rw"},
+        },
+        network_mode="none",
+        mem_limit="512m",
+        timeout=600,
     )
     _enforce_repo_size(volume_name)
 

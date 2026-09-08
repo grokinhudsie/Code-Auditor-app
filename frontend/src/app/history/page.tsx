@@ -92,9 +92,12 @@ function GroupCard({
     });
   }
 
-  // Rescanning a local target re-submits local_path, which the backend rejects
-  // unless local scans are enabled there.
-  const canRescan = group.sourceType === "git" || localAllowed === true;
+  // Rescan resubmits the original target, so it only exists where there is one:
+  // a git URL always, a local path when the backend still allows them, and never
+  // an upload (those bytes are deleted once the scan finishes).
+  const canRescan =
+    group.sourceType === "git" ||
+    (group.sourceType === "local" && localAllowed === true);
 
   return (
     <section className="rounded-lg border border-neutral-200 dark:border-neutral-800">

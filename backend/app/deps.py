@@ -4,6 +4,7 @@ import os
 import re
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import Depends, HTTPException, Request
 from redis import Redis
@@ -18,6 +19,23 @@ REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 GIT_URL_RE = re.compile(r"^https://[A-Za-z0-9.-]+(:\d+)?/[A-Za-z0-9._~/-]+(\.git)?$")
 
 SCAN_JOB_TIMEOUT = 3600
+
+# Zip uploads. The browser POSTs the archive straight here, bypassing the Vercel
+# proxy's 4.5MB body cap, so the API needs a URL the BROWSER can reach. Setting
+# PUBLIC_API_BASE is what enables the feature: gating on the URL rather than a
+# separate flag makes it impossible to advertise uploads with nowhere to send
+# them. It must be https when the frontend is (mixed content is blocked).
+PUBLIC_API_BASE = os.environ.get("PUBLIC_API_BASE", "").strip().rstrip("/")
+MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
+MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
+UPLOAD_TICKET_TTL = int(os.environ.get("UPLOAD_TICKET_TTL_SECONDS", "1800"))
+# Shared with the worker via the "uploads" compose volume.
+UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR", "/uploads"))
+
+
+def zip_uploads_enabled() -> bool:
+    return bool(PUBLIC_API_BASE)
+
 
 # Comma-separated allowed frontend origins (e.g. your Vercel URL in production).
 # The FIRST entry is canonical: it determines the WebAuthn RP ID default and the

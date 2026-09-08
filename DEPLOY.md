@@ -82,12 +82,20 @@ Minimal (HTTP, testing only):
 ufw allow 8000/tcp
 ```
 
-Recommended (HTTPS via Caddy, needs a domain pointed at the droplet):
+Recommended, and **required if you want zip uploads** (HTTPS via Caddy, needs
+a domain pointed at the droplet). Zip uploads go from the browser straight to
+this address, and a browser will not let an `https://` page POST to `http://`:
 
 ```bash
 # Caddyfile
 api.yourdomain.com {
     reverse_proxy localhost:8000
+
+    # Zip uploads bypass Vercel, so the body arrives here in full.
+    # Keep this comfortably above MAX_UPLOAD_MB.
+    request_body {
+        max_size 120MB
+    }
 }
 ```
 
@@ -125,7 +133,47 @@ won't accept scans from anyone who doesn't have it. Remaining hardening:
   sensitive on it. The worker runs untrusted code in sandboxes. See
   `THREAT_MODEL.md`.
 
-## 7. Local directory scans (local stack only)
+## 7. Zip uploads
+
+Lets anyone using the app scan a codebase without pushing it anywhere — the
+browser sends a `.zip` (or compresses a chosen folder) directly to the API.
+
+```bash
+# in .env on the droplet
+PUBLIC_API_BASE=https://api.yourdomain.com   # enables the feature
+MAX_UPLOAD_MB=100                            # optional, default 100
+```
+
+`PUBLIC_API_BASE` is the switch: unset, the API rejects upload tickets with 403
+and the UI hides the tab. **No Vercel environment changes are needed** — the
+browser learns the upload URL from the ticket response, so it stays a single
+droplet-side setting you can change without a redeploy.
+
+Why direct-to-droplet: Vercel caps serverless request bodies at 4.5MB, which is
+too small for real codebases. This is the only request in the app that skips the
+Vercel proxy, so two things must be right:
+
+- **TLS on the API** (§4). An `https://` Vercel page cannot POST to `http://`.
+- **`FRONTEND_ORIGIN`** must list your real frontend URL. Every other route
+  treats CORS as belt-and-braces; here it is what lets the browser send at all.
+
+Notes:
+
+- Uploads are authenticated by a **single-use ticket** issued through the normal
+  (token-authenticated, rate-limited) proxy, not by the API token — the browser
+  never sees that. A ticket is good for one upload to one scan, expires after
+  `UPLOAD_TICKET_TTL_SECONDS` (default 30 min), and permits at most
+  `MAX_UPLOAD_MB`.
+- The archive is stored on a `vulnscan-uploads` docker volume and **deleted as
+  soon as the scan finishes**. Size the droplet's disk for a few concurrent
+  uploads; abandoned ones are swept on the next scan submission.
+- Rescan is unavailable for uploaded scans, since the bytes are gone. Re-upload
+  instead.
+- The first zip scan pulls `python:3.12-alpine` (~10s, once).
+- **Local dev works without TLS**: set `PUBLIC_API_BASE=http://localhost:8000`.
+  Both origins are `http`, so there's no mixed content.
+
+## 8. Local directory scans (local stack only)
 
 The "Local path" scan option copies a directory from the Docker host into the
 scan sandbox, so it only works when the whole stack runs on the same machine
@@ -149,7 +197,8 @@ Notes:
   (`/Users` is shared by default).
 - Non-git directories work too; gitleaks then scans file contents instead of
   git history.
-- **Upgrading an existing database:** automatic. `init_db()` creates missing
+- **Upgrading an existing database:** automatic (this covers `upload_name`,
+  added for zip uploads). `init_db()` creates missing
   tables and then applies the idempotent column migrations in
   `shared/db.py:MIGRATIONS` on every boot, so `docker compose up -d --build`
   after a `git pull` is all you need. (One exception: databases created before
@@ -163,7 +212,7 @@ Notes:
 
   via `docker compose exec postgres psql -U vulnscanner -d vulnscanner`.)
 
-## 8. Operations
+## 9. Operations
 
 ```bash
 docker compose logs -f worker    # watch scans run

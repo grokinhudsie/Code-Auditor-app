@@ -26,6 +26,7 @@ export type Scan = {
   source_type: string;
   git_url: string | null;
   local_path: string | null;
+  upload_name: string | null;
   status: string;
   error: string | null;
   file_tree: string[] | null;
@@ -34,7 +35,10 @@ export type Scan = {
   findings: Finding[];
 };
 
-export type ScanSource = { git_url: string } | { local_path: string };
+export type ScanSource =
+  | { git_url: string }
+  | { local_path: string }
+  | { upload_name: string; upload_size: number };
 
 export type ScanSummary = Omit<Scan, "findings"> & {
   target: string;
@@ -43,6 +47,17 @@ export type ScanSummary = Omit<Scan, "findings"> & {
 
 export type Capabilities = {
   local_scans: boolean;
+  zip_uploads: boolean;
+  max_upload_mb: number;
+};
+
+// Only present when the scan source was a zip: the ticket for the one direct
+// browser -> backend request in the app.
+export type CreatedScan = {
+  scan_id: string;
+  status: string;
+  upload_url?: string;
+  upload_token?: string;
 };
 
 export type Project = {
@@ -68,11 +83,11 @@ export async function getCapabilities(): Promise<Capabilities> {
   try {
     return await request<Capabilities>(`/api/capabilities`);
   } catch {
-    return { local_scans: false };
+    return { local_scans: false, zip_uploads: false, max_upload_mb: 0 };
   }
 }
 
-export async function createScan(source: ScanSource): Promise<{ scan_id: string }> {
+export async function createScan(source: ScanSource): Promise<CreatedScan> {
   return request(`/api/scans`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -106,4 +121,45 @@ export async function upsertProject(target: string, name: string): Promise<Proje
 
 export async function deleteProject(id: string): Promise<void> {
   return request(`/api/projects/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+/**
+ * Send the archive straight to the backend, skipping the Next.js proxy.
+ *
+ * Vercel caps serverless request bodies at 4.5MB, which is too small for real
+ * codebases, so this is the one request that talks to the backend directly.
+ * The one-time ticket from createScan authenticates it; no cookie or API token
+ * is involved, so withCredentials stays off to match the backend's CORS config.
+ *
+ * XHR rather than fetch: fetch still cannot report upload progress.
+ */
+export function uploadZip(
+  url: string,
+  token: string,
+  blob: Blob,
+  onProgress?: (fraction: number) => void
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    xhr.setRequestHeader("Content-Type", "application/zip");
+    xhr.setRequestHeader("X-Upload-Token", token);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress?.(e.loaded / e.total);
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) return resolve();
+      let detail = `Upload failed (${xhr.status})`;
+      try {
+        detail = JSON.parse(xhr.responseText).detail ?? detail;
+      } catch {
+        // non-JSON error body (e.g. a proxy's own 413 page)
+      }
+      reject(new Error(detail, { cause: xhr.status }));
+    };
+    xhr.onerror = () =>
+      reject(new Error("Could not reach the scan server. Check that it is running and reachable over https."));
+    xhr.onabort = () => reject(new Error("Upload cancelled"));
+    xhr.send(blob);
+  });
 }

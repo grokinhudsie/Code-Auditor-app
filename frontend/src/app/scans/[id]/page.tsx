@@ -13,7 +13,10 @@ import {
 import { FindingCard } from "@/components/FindingCard";
 import { ExportMenu } from "@/components/ExportMenu";
 
-const TERMINAL = new Set(["completed", "failed"]);
+// awaiting_upload is terminal for polling purposes: the bytes are only ever
+// sent by the tab that created the scan, so a reloaded or shared link to one
+// would otherwise poll forever.
+const TERMINAL = new Set(["completed", "failed", "awaiting_upload"]);
 const SEVERITY_ORDER = ["critical", "high", "medium", "low", "info"];
 const CATEGORY_LABEL: Record<string, string> = {
   sca: "Dependencies (SCA)",
@@ -88,9 +91,12 @@ export default function ScanPage({
   const running = !TERMINAL.has(scan.status);
   const real = scan.findings.filter((f) => !f.likely_false_positive);
   const falsePositives = scan.findings.filter((f) => f.likely_false_positive);
-  // Rescanning a local target re-submits local_path, which the backend
-  // rejects unless local scans are enabled there.
-  const canRescan = scan.git_url ? true : localAllowed === true;
+  // Rescan resubmits the original target, so it only exists where there is one:
+  // a git URL always, a local path when the backend still allows them, and never
+  // an upload (those bytes are deleted once the scan finishes).
+  const canRescan =
+    scan.source_type === "git" ||
+    (scan.source_type === "local" && localAllowed === true);
 
   async function rescan() {
     if (!scan) return;
@@ -121,7 +127,7 @@ export default function ScanPage({
           ← New scan
         </Link>
         <h1 className="mt-2 break-all text-xl font-semibold">
-          {scan.git_url ?? scan.local_path}
+          {scan.git_url ?? scan.local_path ?? scan.upload_name}
         </h1>
         <div className="mt-2 flex items-center gap-2 text-sm">
           <StatusBadge status={scan.status} />

@@ -6,11 +6,18 @@ services:
     restart: unless-stopped
     ports:
       - "8000:8000"
+    volumes:
+      - uploads:/uploads
     environment:
       DATABASE_URL: postgresql+psycopg2://vulnscanner:vulnscanner@postgres:5432/vulnscanner
       REDIS_URL: redis://redis:6379/0
       FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:3000}
       API_TOKEN: ${API_TOKEN:-}
+      # Browser-reachable API base. Set it to enable zip uploads: the browser
+      # POSTs the archive here directly, bypassing Vercel's 4.5MB body cap.
+      PUBLIC_API_BASE: ${PUBLIC_API_BASE:-}
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-100}
+      UPLOAD_TICKET_TTL_SECONDS: ${UPLOAD_TICKET_TTL_SECONDS:-1800}
       ALLOW_LOCAL_SCANS: ${ALLOW_LOCAL_SCANS:-}
       SCAN_PATH_ROOT: ${SCAN_PATH_ROOT:-}
       GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
@@ -33,6 +40,7 @@ services:
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - uploads:/uploads
     environment:
       DATABASE_URL: postgresql+psycopg2://vulnscanner:vulnscanner@postgres:5432/vulnscanner
       REDIS_URL: redis://redis:6379/0
@@ -42,6 +50,9 @@ services:
       ANTHROPIC_FALLBACK_MODEL: ${ANTHROPIC_FALLBACK_MODEL:-claude-opus-4-8}
       ALLOW_LOCAL_SCANS: ${ALLOW_LOCAL_SCANS:-}
       SCAN_PATH_ROOT: ${SCAN_PATH_ROOT:-}
+      MAX_REPO_MB: ${MAX_REPO_MB:-500}
+      MAX_ZIP_ENTRIES: ${MAX_ZIP_ENTRIES:-20000}
+      UPLOADS_VOLUME: vulnscan-uploads
     depends_on:
       postgres:
         condition: service_healthy
@@ -74,3 +85,7 @@ services:
 
 volumes:
   pgdata:
+  uploads:
+    # Explicit name: compose would otherwise prefix the project name, and the
+    # worker has to name this volume when mounting it into a sibling container.
+    name: vulnscan-uploads

@@ -10,7 +10,7 @@ export const FORMAT_LABEL: Record<ExportFormat, string> = {
 };
 
 function target(scan: Scan): string {
-  return scan.git_url ?? scan.local_path ?? "unknown target";
+  return scan.git_url ?? scan.local_path ?? scan.upload_name ?? "unknown target";
 }
 
 function severity(f: Finding): string {
@@ -38,6 +38,7 @@ export function toJson(scan: Scan, findings: Finding[]): string {
         source_type: scan.source_type,
         git_url: scan.git_url,
         local_path: scan.local_path,
+        upload_name: scan.upload_name,
         status: scan.status,
         created_at: scan.created_at,
       },
@@ -71,7 +72,9 @@ export function toSarif(scan: Scan, findings: Finding[]): string {
     byScanner.set(f.scanner, list);
   }
 
-  const srcRoot = scan.git_url ?? (scan.local_path ? `file://${scan.local_path}` : undefined);
+  // An uploaded zip has no stable location to point SARIF consumers at.
+  const srcRoot =
+    scan.git_url ?? (scan.local_path ? `file://${scan.local_path}` : undefined);
 
   const runs = [...byScanner.entries()].map(([scanner, fs]) => {
     const ruleIndex = new Map<string, number>();

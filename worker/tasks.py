@@ -1,6 +1,8 @@
 """Scan pipeline executed by the RQ worker."""
 
+import os
 import re
+from pathlib import Path
 
 from shared.db import SessionLocal, init_db
 from shared.localpath import local_scans_enabled, validate_local_path
@@ -12,6 +14,9 @@ import sandbox
 import scanners
 
 GIT_URL_RE = re.compile(r"^https://[A-Za-z0-9.-]+(:\d+)?/[A-Za-z0-9._~/-]+(\.git)?$")
+
+# Shared with the API via the "uploads" compose volume.
+UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "/uploads")
 
 
 def _set_status(scan_id: str, status: str, **fields) -> None:
@@ -102,6 +107,7 @@ def run_scan(scan_id: str) -> None:
         source_type = scan.source_type or "git"
         git_url = scan.git_url
         local_path = scan.local_path
+        upload_name = scan.upload_name
 
     # Re-validate the source here too (defense in depth vs a tampered DB row).
     if source_type == "local":
@@ -113,8 +119,16 @@ def run_scan(scan_id: str) -> None:
         except ValueError as exc:
             _set_status(scan_id, "failed", error=f"invalid local path: {exc}")
             return
-    elif not (git_url and GIT_URL_RE.match(git_url)):
-        _set_status(scan_id, "failed", error="invalid git URL")
+    elif source_type == "zip":
+        if not upload_name:
+            _set_status(scan_id, "failed", error="upload is missing")
+            return
+    elif source_type == "git":
+        if not (git_url and GIT_URL_RE.match(git_url)):
+            _set_status(scan_id, "failed", error="invalid git URL")
+            return
+    else:
+        _set_status(scan_id, "failed", error=f"unknown source type: {source_type}")
         return
 
     volume = None
@@ -124,6 +138,10 @@ def run_scan(scan_id: str) -> None:
             _set_status(scan_id, "copying")
             volume = sandbox.create_workspace(scan_id)
             sandbox.copy_local_dir(volume, local_path)
+        elif source_type == "zip":
+            _set_status(scan_id, "unpacking")
+            volume = sandbox.create_workspace(scan_id)
+            sandbox.unpack_zip(volume, scan_id)
         else:
             _set_status(scan_id, "cloning")
             volume = sandbox.create_workspace(scan_id)
@@ -164,3 +182,7 @@ def run_scan(scan_id: str) -> None:
     finally:
         if volume:
             sandbox.remove_workspace(volume)
+        if source_type == "zip":
+            # Metadata-only unlink; the worker never opens these bytes. Only the
+            # unpack sandbox ever reads the archive.
+            Path(UPLOAD_DIR, f"{scan_id}.zip").unlink(missing_ok=True)

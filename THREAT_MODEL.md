@@ -18,9 +18,15 @@ defend against, how, and what remains out of scope.
 ## Trust boundaries
 
 ```
-untrusted repo ──► ephemeral sandbox container ──► normalized findings ──► DB ──► UI
-                   (non-root, capped, networkless)
+untrusted repo ─┐
+                ├─► ephemeral sandbox container ──► normalized findings ──► DB ──► UI
+uploaded zip ───┘     (non-root, capped, networkless)
 ```
+
+An uploaded archive is untrusted from the moment it arrives. The API only
+**counts** its bytes and checks a 4-byte magic number; the worker only
+**unlinks** it afterwards. Neither long-lived process ever opens or parses an
+archive — extraction happens exclusively inside a sandbox container.
 
 Everything to the left of the sandbox is untrusted. The sandbox is the boundary;
 nothing from a scanned repo is ever executed on the host or in the long-lived
@@ -33,7 +39,7 @@ worker process.
 | T1 | Malicious repo executes code to escape onto the host | All scanning runs in **ephemeral containers** spawned per step. Never run scanners in the worker or on the host. |
 | T2 | Container breakout via privileges | Containers run **non-root** (`1000:1000`), **`cap_drop: ALL`**, `no-new-privileges`, and a fresh container per step (`--rm`). |
 | T3 | Data exfiltration / SSRF / callbacks from scanned code | Scan steps run with **`network=none`**. Egress is granted **only** to the git clone and scanner DB/rule refresh steps, which run the tool — not repo code. |
-| T4 | Resource exhaustion (fork bombs, huge repos, zip bombs) | Per-container `mem_limit`, `nano_cpus`, `pids_limit`, `tmpfs` size cap, and a hard wall-clock **timeout** on every step. Clones are shallow (`--depth 1`) and **repo size is capped** after clone. |
+| T4 | Resource exhaustion (fork bombs, huge repos, zip bombs) | Per-container `mem_limit`, `nano_cpus`, `pids_limit`, `tmpfs` size cap, and a hard wall-clock **timeout** on every step. Clones are shallow (`--depth 1`) and **repo size is capped** after clone. Uploads are capped at ingest (`MAX_UPLOAD_MB`), enforced **while streaming**, so an oversized body is aborted rather than buffered. Extraction caps entry count, rejects archives whose *declared* size exceeds the cap, and — because headers can lie — copies against a **shrinking byte budget** that kills a bomb mid-stream instead of after it has filled the volume. |
 | T5 | Git URL abuse (`file://`, `ssh://`, option injection like `--upload-pack`) | API and worker both validate against a strict **https-only regex**; the URL is passed as a positional arg, never interpolated into a shell. |
 | T6 | Denial of service by flooding scan submissions | **Per-IP rate limiting** on `POST /scans` (Redis sliding window). |
 | T7 | Leaked secrets echoed into logs/DB/UI | Secret-category findings have their snippet **redacted** at normalization (`redact_secret`); the raw value is never stored or logged. |
@@ -43,6 +49,9 @@ worker process.
 | T11 | Prompt injection in repo content steering the LLM | The LLM only triages/explains and proposes diffs that are validated before display; it has no tools and cannot act. Worst case is a misleading explanation, not code execution. |
 | T12 | Session/account attacks (CSRF, session theft, credential stuffing) | Sessions are httpOnly `SameSite=Lax` cookies with only their **SHA-256 hash** stored server-side; state-changing routes also check the `Origin` header. No passwords exist to stuff — auth is WebAuthn (phishing-resistant, challenges single-use with 5-min TTL) or GitHub OAuth (CSRF-protected by a `state` cookie; redirect target validated against open redirects). Auth endpoints are rate-limited per real client IP, and verification codes allow 5 attempts before invalidation. |
 | T13 | Scan-result disclosure via leaked links | `GET /scans/{id}` is deliberately a **capability URL** (unguessable 32-hex id, readable by any link-holder) to keep results shareable and anonymous scans usable. Only the per-user history listing is authenticated. Treat a result link as containing the findings themselves. |
+| T14 | Zip slip: archive entries escaping the extraction directory | The extractor rejects absolute paths, `..` segments and backslash paths, then resolves each destination with `realpath` to confirm containment. **Symlink entries are refused outright** rather than recreated — otherwise a `link -> /workspace` entry followed by a write through it could plant a forged SARIF file for a scanner step to read back. Non-regular files are refused too. Extraction runs non-root, networkless, in a throwaway container whose only writable mount is that scan's own volume. |
+| T15 | Upload abuse / disk exhaustion | Tickets are issued only through the token-authenticated proxy on the **already IP-rate-limited** `POST /scans` path, so uploads inherit that quota. Each ticket is single-use (atomic `GETDEL`), TTL-bound and scoped to one scan id; retries per scan id are capped. Archives are deleted as soon as the scan finishes, and tickets abandoned before upload are swept — row failed, bytes unlinked — on the next submission. |
+| T16 | The upload endpoint bypasses the API_TOKEN proxy | It must: the browser cannot be given the shared token. The one-time ticket is the credential instead, and its entire capability is "write at most `MAX_UPLOAD_MB` into this one already-rate-limited scan". Ticket, scan-id format, scan state and declared length are **all checked before a single body byte is read**, so an unauthenticated caller cannot make the API absorb a large body. CORS limits which pages can call it, but is treated as UX, not as the boundary. |
 
 ## Residual risk / out of scope
 
@@ -54,6 +63,10 @@ worker process.
   execution path (it already does — repo code only ever runs in child sandboxes).
 - **Supply-chain trust in the scanner images themselves.** We pull official
   images; pin digests in a hardened deployment.
+- **The API writes untrusted bytes to disk without inspecting them**, and the
+  worker mounts that volume to unlink them. Neither process ever opens an
+  archive, so all parsing risk stays inside the sandbox — but concurrent
+  uploads are bounded only by rate limits and disk.
 - **Cost abuse of the LLM layer.** Mitigated by triage caching (by finding hash)
   and rate limiting, but a determined attacker submitting many unique repos still
   incurs cost. Add auth/quotas before exposing publicly.
